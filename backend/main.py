@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from config import get_settings
+from db.database import init_db
+from scheduler.tasks import start_scheduler, shutdown_scheduler
+from api import sources, reports, chat, pipeline, prompts
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting FOMO backend…")
+    init_db()
+    start_scheduler()
+    yield
+    logger.info("Shutting down FOMO backend…")
+    shutdown_scheduler()
+
+
+app = FastAPI(
+    title="FOMO 美股 AI 投研系统",
+    description="美股财经投研 AI Agent 后端 API",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(sources.router, prefix="/api/sources", tags=["数据源"])
+app.include_router(reports.router, prefix="/api/reports", tags=["简报"])
+app.include_router(chat.router, prefix="/api/chat", tags=["RAG 对话"])
+app.include_router(pipeline.router, prefix="/api/pipeline", tags=["流水线"])
+app.include_router(prompts.router, prefix="/api/prompts", tags=["Prompt 管理"])
+
+
+@app.get("/api/health", tags=["系统"])
+async def health() -> dict:
+    return {"status": "ok", "version": "1.0.0"}

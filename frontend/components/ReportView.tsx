@@ -6,36 +6,11 @@ import { StockPriceBadge } from "./StockPriceBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Hash, Zap } from "lucide-react";
+import { Hash, Users, Zap, Flame } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 
 interface Props {
   report: Report;
-}
-
-function MarkdownText({ text }: { text: string }) {
-  const lines = text.split("\n");
-  return (
-    <div className="prose-report space-y-1">
-      {lines.map((line, i) => {
-        if (line.startsWith("## ")) {
-          return <h2 key={i}>{line.slice(3)}</h2>;
-        }
-        if (line.startsWith("### ")) {
-          return <h3 key={i}>{line.slice(4)}</h3>;
-        }
-        if (line.startsWith("- ") || line.startsWith("* ")) {
-          return <p key={i} className="pl-4 before:content-['•'] before:mr-2 before:text-primary">{line.slice(2)}</p>;
-        }
-        if (line.startsWith("**") && line.endsWith("**")) {
-          return <p key={i} className="font-semibold text-foreground">{line.slice(2, -2)}</p>;
-        }
-        if (line.trim() === "") {
-          return <div key={i} className="h-2" />;
-        }
-        return <p key={i}>{line}</p>;
-      })}
-    </div>
-  );
 }
 
 export function ReportView({ report }: Props) {
@@ -43,9 +18,42 @@ export function ReportView({ report }: Props) {
   const themes = report.hotspots.themes ?? [];
   const keywords = report.hotspots.keywords ?? [];
   const hotTickers = report.hotspots.hot_tickers ?? [];
+  const bloggerOps = report.sentiment.source_sentiments ?? [];
+
+  const hotPool = report.hot_pool ?? [];
 
   return (
     <div className="space-y-4">
+      {/* 简报保存瞬间的热门股池（与「热门股」页同算法） */}
+      {hotPool.length > 0 && (
+        <Card className="bg-card border-border border-orange-500/20">
+          <CardHeader className="pb-2 pt-4 px-4">
+            <CardTitle className="text-sm text-muted-foreground flex items-center gap-2">
+              <Flame className="h-4 w-4 text-orange-400" />
+              本简报生成时的热门股池快照
+            </CardTitle>
+            <p className="text-xs text-muted-foreground font-normal mt-1">
+              与侧栏「热门股」页同一套算法（最近 N 个美股交易日，按简讯归属到 NYSE 会话日计分）；盘前/盘后简报成功保存时写入快照。
+            </p>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            <div className="flex flex-wrap gap-2">
+              {hotPool.map((h) => (
+                <Badge
+                  key={h.ticker}
+                  variant="secondary"
+                  className="text-xs font-mono gap-1.5"
+                  title={h.sources?.join("、")}
+                >
+                  <span className="text-muted-foreground">{h.mention_count}</span>
+                  ${h.ticker}
+                </Badge>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Stock prices row */}
       {stockEntries.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -131,6 +139,44 @@ export function ReportView({ report }: Props) {
         </Card>
       </div>
 
+      {/* 仅展示情绪 Agent 判定「有操作/有观点」的博主（不与全文重复展示简讯原文） */}
+      <Card className="bg-card border-border">
+        <CardHeader className="pb-2 pt-4 px-4">
+          <CardTitle className="text-sm text-muted-foreground flex items-center gap-2">
+            <Users className="h-4 w-4 text-accent" />
+            今日操作与观点（各博主）
+          </CardTitle>
+          <p className="text-xs text-muted-foreground font-normal mt-1">
+            仅摘录当日具备明确交易操作或可执行观点的数据源；广告、引流、无关内容已过滤。完整简讯请至「文章库」查看。
+          </p>
+        </CardHeader>
+        <CardContent className="px-4 pb-4">
+          {bloggerOps.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              今日时间窗内未摘录到符合条件的博主级操作或观点。如需阅读原文，请打开「文章库」。
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {bloggerOps.map((row) => (
+                <div
+                  key={row.source}
+                  className="rounded-lg border border-border/80 bg-muted/20 px-3 py-2.5 space-y-1.5"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-foreground">{row.source}</span>
+                  </div>
+                  {row.summary ? (
+                    <p className="text-xs text-foreground/90 leading-relaxed">{row.summary}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">（无摘要）</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Summary markdown */}
       <Card className="bg-card border-border">
         <CardHeader className="pb-2 pt-4 px-4">
@@ -138,7 +184,14 @@ export function ReportView({ report }: Props) {
         </CardHeader>
         <CardContent className="px-4 pb-4">
           <ScrollArea className="max-h-[500px]">
-            <MarkdownText text={report.summary_text || "暂无简报内容"} />
+            <div className="prose prose-sm max-w-none dark:prose-invert
+              prose-headings:text-primary prose-headings:font-semibold
+              prose-h1:text-base prose-h2:text-sm prose-h3:text-sm
+              prose-p:text-sm prose-p:leading-relaxed prose-p:my-1
+              prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5
+              prose-strong:text-foreground">
+              <ReactMarkdown>{report.summary_text || "暂无简报内容"}</ReactMarkdown>
+            </div>
           </ScrollArea>
         </CardContent>
       </Card>

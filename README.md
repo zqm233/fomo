@@ -26,7 +26,7 @@
 ## 技术栈
 
 - **前端**：Next.js 14 (App Router) · TypeScript · shadcn/ui · Tailwind CSS · Recharts
-- **后端**：Python FastAPI · LangChain · APScheduler
+- **后端**：Python 3.12+ · FastAPI · LangChain · APScheduler · **依赖用 [uv](https://docs.astral.sh/uv/) 管理**
 - **AI**：OpenAI GPT-4o-mini（可替换任意 OpenAI 兼容模型）
 - **向量库**：Chroma (持久化)
 - **数据库**：SQLite (SQLAlchemy ORM)
@@ -52,27 +52,29 @@ cp backend/.env.example backend/.env
 # 编辑 backend/.env，填入 OPENAI_API_KEY 等配置
 ```
 
-### 3. 启动后端
+### 3. 安装依赖（一次性）
+
+需要 **Python 3.12+** 与 **[uv](https://docs.astral.sh/uv/)**（`brew install uv` 或官方安装脚本）。在仓库根目录：
 
 ```bash
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+make install
 ```
 
-后端启动后访问 API 文档：http://localhost:8000/docs
+会：占位复制 `backend/.env`、`frontend/.env.local`（若不存在）、创建 `data/`、克隆 x-tweet-fetcher、`uv sync`、前端 `npm install`。
 
-### 4. 启动前端
+无 uv 时需自行在 `backend` 下用 `pip install -r requirements.txt`（该文件可由 `uv export` 生成）。
+
+### 4. 启动开发服务
+
+需**两个终端**：
 
 ```bash
-cd frontend
-cp .env.local.example .env.local
-npm install
-npm run dev
+make dev-backend    # 终端 1：http://127.0.0.1:8000/docs
+make dev-frontend   # 终端 2：http://localhost:3000
 ```
 
-前端访问：http://localhost:3000
+**更新后端依赖时**：在 `backend/pyproject.toml` 中改版本后执行  
+`cd backend && uv lock && uv export --no-dev --no-hashes -o requirements.txt`（Docker 构建仍用 `requirements.txt`）。
 
 ---
 
@@ -86,11 +88,12 @@ cp backend/.env.example backend/.env
 # 2. 创建数据目录
 mkdir -p data
 
-# 3. 启动
-docker compose up --build -d
+# 3. 启动（前台可改 `docker compose up --build -d`）
+make up
+# 或: docker compose up --build -d
 
-# 查看日志
-docker compose logs -f
+# 停止
+make down
 ```
 
 服务地址：
@@ -118,6 +121,9 @@ fomo/
 │       └── useJobPoller.ts      # Job 状态轮询 Hook
 │
 ├── backend/                     # Python FastAPI 后端
+│   ├── pyproject.toml           # 依赖声明（uv）
+│   ├── uv.lock                  # 锁定版本
+│   ├── third_party/             # x-tweet-fetcher（git clone，默认不纳入版本库）
 │   ├── agents/                  # 4 个 LangChain Agent
 │   ├── api/                     # FastAPI 路由
 │   ├── crawlers/                # 爬虫层（Twitter / 微信）
@@ -160,12 +166,17 @@ fomo/
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `OPENAI_API_KEY` | ✅ | OpenAI API Key |
-| `OPENAI_BASE_URL` | ❌ | 代理地址（可选） |
-| `LLM_MODEL` | ❌ | 默认 `gpt-4o-mini` |
-| `TWITTER_FETCHER_PATH` | ❌ | x-tweet-fetcher 目录路径 |
+| `OPENAI_API_KEY` | 对话 ✅ | 火山方舟 / OpenAI Key；`EMBEDDING_PROVIDER=openai` 时向量也用它 |
+| `OPENAI_BASE_URL` | ❌ | 默认 `https://ark.cn-beijing.volces.com/api/v3`，可按厂商修改 |
+| `LLM_MODEL` | ❌ | 默认 `doubao-seed-2-0-mini-260428`；方舟亦可填接入点 ID |
+| `EMBEDDING_PROVIDER` | ❌ | 默认 **`local`**（本机 BGE）；`openai` 为云端兼容 embedding |
+| `EMBEDDING_DEVICE` | ❌ | 仅 **`local`**：`auto`（默认）/ `cpu` / `mps` / `cuda` |
 | `TELEGRAM_BOT_TOKEN` | ❌ | Telegram 推送（留空不推送） |
 | `WECOM_WEBHOOK_URL` | ❌ | 企业微信推送（留空不推送） |
+
+**豆包对话**：`OPENAI_*` + `LLM_MODEL`。**云端向量**：`EMBEDDING_PROVIDER=openai`（embedding 模型名写在 `backend/config.py` 常量 `_OPENAI_COMPAT_EMBEDDING_MODEL`）。**本机 BGE**：`EMBEDDING_PROVIDER=local`（权重名写在同文件 `_LOCAL_EMBEDDING_MODEL`）。`OPENAI_BASE_URL` 仅影响对话，不影响本机向量。
+
+切换 `EMBEDDING_PROVIDER` 或修改 `config.py` 里向量模型常量后，向量维度可能变化，需**清空或重建** `CHROMA_PERSIST_DIR`。
 
 ---
 

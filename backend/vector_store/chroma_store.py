@@ -7,6 +7,7 @@ from typing import List, Optional
 import chromadb
 from chromadb import Collection
 from chromadb.config import Settings as ChromaSettings
+from langchain_core.embeddings import Embeddings
 from langchain_openai import OpenAIEmbeddings
 
 from config import get_settings
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 _client: chromadb.PersistentClient | None = None
-_embeddings: OpenAIEmbeddings | None = None
+_embeddings: Embeddings | None = None
 
 
 def _get_client() -> chromadb.PersistentClient:
@@ -31,17 +32,79 @@ def _get_client() -> chromadb.PersistentClient:
     return _client
 
 
-def _get_embeddings() -> OpenAIEmbeddings:
+def _resolve_embedding_device() -> str:
+    d = settings.embedding_device
+    if d in ("cpu", "mps", "cuda"):
+        return d
+    import torch
+
+    if torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def _get_embeddings() -> Embeddings:
     global _embeddings
     if _embeddings is None:
-        kwargs: dict = {
-            "model": settings.embedding_model,
-            "api_key": settings.openai_api_key,
-        }
-        if settings.openai_base_url:
-            kwargs["base_url"] = settings.openai_base_url
-        _embeddings = OpenAIEmbeddings(**kwargs)
+        if settings.embedding_provider == "local":
+            import os
+            from langchain_huggingface import HuggingFaceEmbeddings
+
+            # Avoid slow startup network check for model updates
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+            os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+
+            device = _resolve_embedding_device()
+            logger.info(
+                "Using local HuggingFace embeddings model=%s device=%s",
+                settings.embedding_model,
+                device,
+            )
+            _embeddings = HuggingFaceEmbeddings(
+                model_name=settings.embedding_model,
+                model_kwargs={"device": device},
+                encode_kwargs={"normalize_embeddings": True},
+            )
+        else:
+            kwargs: dict = {
+                "model": settings.embedding_model,
+                "api_key": settings.openai_api_key,
+            }
+            if settings.openai_base_url:
+                kwargs["base_url"] = settings.openai_base_url
+            _embeddings = OpenAIEmbeddings(**kwargs)
     return _embeddings
+
+
+_CHUNK_SIZE    = 500   # characters per chunk (≈ 300-500 tokens for Chinese)
+_CHUNK_OVERLAP = 50    # overlap between consecutive chunks
+_SENTENCE_ENDS = ("。", "！", "？", "…", "\n", ". ", "! ", "? ")
+
+
+def _chunk_text(text: str) -> list[str]:
+    """Split text into overlapping chunks, preferring sentence boundaries."""
+    if len(text) <= _CHUNK_SIZE:
+        return [text]
+
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + _CHUNK_SIZE, len(text))
+        # Try to extend to a sentence boundary within a 50-char window
+        if end < len(text):
+            best = end
+            for i in range(end, max(end - 50, start), -1):
+                if text[i - 1] in _SENTENCE_ENDS:
+                    best = i
+                    break
+            end = best
+        chunks.append(text[start:end].strip())
+        if end >= len(text):
+            break
+        start = end - _CHUNK_OVERLAP
+    return [c for c in chunks if c]
 
 
 def _collection_name(source_id: str) -> str:
@@ -113,30 +176,35 @@ def add_documents(
     texts: List[str],
     metadatas: List[dict],
 ) -> int:
-    """Embed and store documents, skipping semantic duplicates. Returns count added."""
+    """Chunk, embed and store documents. Returns count of articles added."""
     collection = get_or_create_collection(source_id)
-    to_add_ids, to_add_texts, to_add_metas = [], [], []
+
+    chunk_ids, chunk_texts, chunk_metas = [], [], []
+    articles_added = 0
 
     for doc_id, text, meta in zip(doc_ids, texts, metadatas):
-        if is_semantic_duplicate(source_id, text):
-            logger.debug("Skipping semantic duplicate for source %s", source_id)
-            continue
-        to_add_ids.append(doc_id)
-        to_add_texts.append(text)
-        to_add_metas.append(meta)
+        chunks = _chunk_text(text)
+        for i, chunk in enumerate(chunks):
+            chunk_ids.append(f"{doc_id}_c{i}")
+            chunk_texts.append(chunk)
+            chunk_metas.append({**meta, "chunk_index": i, "chunk_total": len(chunks)})
+        articles_added += 1
 
-    if not to_add_ids:
+    if not chunk_ids:
         return 0
 
-    embeddings = embed_texts(to_add_texts)
+    embeddings = embed_texts(chunk_texts)
     collection.add(
-        ids=to_add_ids,
+        ids=chunk_ids,
         embeddings=embeddings,
-        documents=to_add_texts,
-        metadatas=to_add_metas,
+        documents=chunk_texts,
+        metadatas=chunk_metas,
     )
-    logger.info("Added %d documents to collection source_%s", len(to_add_ids), source_id)
-    return len(to_add_ids)
+    logger.info(
+        "Added %d chunks (%d articles) to collection source_%s",
+        len(chunk_ids), articles_added, source_id,
+    )
+    return articles_added
 
 
 def query_documents(

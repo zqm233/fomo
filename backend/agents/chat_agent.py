@@ -20,7 +20,7 @@ def build_context(source_ids: List[str], question: str, n_results: int = 6) -> s
         meta = d.get("metadata", {})
         author = meta.get("author", "未知来源")
         date = meta.get("published_date", "")
-        blocks.append(f"[参考{i}] {author} {date}\n{d['content'][:400]}")
+        blocks.append(f"[参考{i}] {author} {date}\n{d['content']}")
     return "\n\n".join(blocks)
 
 
@@ -36,6 +36,7 @@ async def stream_chat_response(
     system_prompt = get_active_prompt("chat_agent") or "你是一位专业的美股投研助手。"
 
     context = build_context(source_ids, question)
+    logger.info("RAG context (%d chars):\n%s", len(context), context[:500] if context else "(empty)")
     if context:
         system_with_context = (
             f"{system_prompt}\n\n"

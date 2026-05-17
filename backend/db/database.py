@@ -33,11 +33,53 @@ class Base(DeclarativeBase):
 
 
 def init_db() -> None:
-    from db import models  # noqa: F401 – registers all ORM models
+    import db.models  # noqa: F401 – registers all ORM models with Base.metadata
 
-    Base.metadata.create_all(bind=engine)
+    # Run any pending Alembic migrations (safe on both fresh and existing DBs)
+    from alembic.config import Config
+    from alembic import command as alembic_command
+    from pathlib import Path
+
+    alembic_cfg = Config(str(Path(__file__).parent.parent / "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", settings.sqlite_url)
+    alembic_command.upgrade(alembic_cfg, "head")
+
+    _cleanup_stale_runs()
     _seed_default_prompts()
     logger.info("Database initialised at %s", settings.sqlite_path)
+
+
+def _cleanup_stale_runs() -> None:
+    """Mark any jobs/tasks left in running/queued state as failed.
+    These are orphaned by a previous process crash or hot-reload.
+    """
+    from datetime import datetime, timezone
+    from db.models import PipelineRun, SourceCrawlLog
+
+    now = datetime.now(timezone.utc)
+    db = SessionLocal()
+    try:
+        stale = db.query(PipelineRun).filter(
+            PipelineRun.status.in_(["running", "queued"])
+        ).all()
+        if stale:
+            for run in stale:
+                run.status = "failed"
+                run.finished_at = now
+                run.error_msg = "服务重启，任务中断"
+            # Also mark their tasks
+            stale_ids = [r.job_id for r in stale]
+            db.query(SourceCrawlLog).filter(
+                SourceCrawlLog.job_id.in_(stale_ids),
+                SourceCrawlLog.status.in_(["running", "pending"]),
+            ).update(
+                {"status": "failed", "error_msg": "服务重启，任务中断", "finished_at": now},
+                synchronize_session=False,
+            )
+            db.commit()
+            logger.info("Cleaned up %d stale pipeline run(s)", len(stale))
+    finally:
+        db.close()
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -56,15 +98,17 @@ def _seed_default_prompts() -> None:
         (
             "sentiment_agent",
             """你是一位专业的美股市场情绪分析师。
-根据以下今日推文/文章内容，分析整体市场情绪，输出 JSON 格式：
+根据以下今日简讯（每条已用【数据源配置名称】标注），先判断整体市场情绪，再按源摘录观点。
+输出 JSON 格式：
 {
   "overall_score": <-1.0 ~ 1.0，正值看多负值看空>,
   "label": <"极度看多"|"看多"|"中性"|"看空"|"极度看空">,
   "bull_ratio": <看多比例 0~1>,
   "bear_ratio": <看空比例 0~1>,
   "key_reasons": [<最多3条核心理由>],
-  "source_sentiments": [{"source": "博主名", "score": 0.0, "summary": "..."}]
+  "source_sentiments": [{"source": "<必须与文中【】名称完全一致>", "score": 0.0, "summary": "1～2句概括该源今日操作与观点"}]
 }
+source_sentiments 仅包含有明确交易操作或明确投资观点的来源；无操作无观点的来源不要列出。不要抄邮箱、广告、引流话术。
 只输出 JSON，不要额外说明。""",
         ),
         (

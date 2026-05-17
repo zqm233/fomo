@@ -5,9 +5,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from db.database import get_db
@@ -113,3 +114,44 @@ def get_history(session_id: str, db: Session = Depends(get_db)):
 def clear_history(session_id: str, db: Session = Depends(get_db)):
     db.query(ChatHistory).filter(ChatHistory.session_id == session_id).delete()
     db.commit()
+
+
+class SessionOut(BaseModel):
+    session_id: str
+    title: str
+    created_at: str
+    last_at: str
+
+
+@router.get("/sessions", response_model=list[SessionOut])
+def list_sessions(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
+    rows = (
+        db.query(
+            ChatHistory.session_id,
+            func.min(ChatHistory.created_at).label("created_at"),
+            func.max(ChatHistory.created_at).label("last_at"),
+        )
+        .group_by(ChatHistory.session_id)
+        .order_by(func.max(ChatHistory.created_at).desc())
+        .limit(limit)
+        .all()
+    )
+    result = []
+    for row in rows:
+        first = (
+            db.query(ChatHistory)
+            .filter(ChatHistory.session_id == row.session_id, ChatHistory.role == "user")
+            .order_by(ChatHistory.created_at.asc())
+            .first()
+        )
+        title = (first.content[:40] + "…" if first and len(first.content) > 40 else (first.content if first else "对话")) 
+        def _iso(dt):
+            s = dt.isoformat()
+            return s if s.endswith("Z") or "+" in s[-6:] else s + "Z"
+        result.append(SessionOut(
+            session_id=row.session_id,
+            title=title,
+            created_at=_iso(row.created_at),
+            last_at=_iso(row.last_at),
+        ))
+    return result

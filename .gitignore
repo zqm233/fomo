@@ -19,6 +19,7 @@ build/
 backend/data/
 data/
 
+# Vendored x-tweet-fetcher (clone via `make vendor-x-tweet-fetcher` or Dockerfile)
 # Node
 node_modules/
 .next/

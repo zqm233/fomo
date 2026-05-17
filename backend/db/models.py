@@ -26,17 +26,18 @@ def _uuid() -> str:
 
 
 class Source(Base):
-    """Twitter 博主 / 微信公众号 数据源配置"""
+    """RSS / 公众号数据源配置"""
 
     __tablename__ = "sources"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    source_type: Mapped[str] = mapped_column(String(20), nullable=False)  # "twitter" | "wechat"
-    handle: Mapped[str] = mapped_column(String(200), nullable=False)      # @username / 公众号ID
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False)  # "rss"
+    handle: Mapped[str] = mapped_column(String(500), nullable=False)      # RSS Feed URL
     description: Mapped[str] = mapped_column(Text, default="")
+    content_type: Mapped[str] = mapped_column(String(20), default="daily")  # "daily" | "research"
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    status: Mapped[str] = mapped_column(String(20), default="ok")         # "ok" | "error"
+    status: Mapped[str] = mapped_column(String(20), default="ok")           # "ok" | "error"
     last_crawled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -74,6 +75,9 @@ class Report(Base):
     stock_prices_json: Mapped[str] = mapped_column(Text, default="{}")
     summary_text: Mapped[str] = mapped_column(Text, default="")
     article_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_digest_json: Mapped[str] = mapped_column(Text, default="[]")  # [{source_name,item_count,preview}]
+    # 盘前/盘后简报生成当下计算的热门股池快照（与 /api/tickers/hot 同算法）
+    hot_pool_json: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -97,12 +101,46 @@ class PipelineRun(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     job_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False, default=_uuid)
-    run_type: Mapped[str] = mapped_column(String(20), nullable=False)      # "pre" | "post" | "manual"
+    run_type: Mapped[str] = mapped_column(String(20), nullable=False)  # pre|post|manual|single_sync
     status: Mapped[str] = mapped_column(String(20), default="queued")      # "queued"|"running"|"success"|"failed"
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_msg: Mapped[str] = mapped_column(Text, default="")
     articles_crawled: Mapped[int] = mapped_column(Integer, default=0)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class SourceCrawlLog(Base):
+    """每次 pipeline 中每个数据源的爬取任务记录"""
+
+    __tablename__ = "source_crawl_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    job_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    source_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|running|success|failed
+    articles_found: Mapped[int] = mapped_column(Integer, default=0)
+    error_msg: Mapped[str] = mapped_column(Text, default="")
+    steps: Mapped[str] = mapped_column(Text, default="[]")  # JSON list of {key,name,status,detail}
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class TickerMention(Base):
+    """历史表：早期方案曾写入提及行；热门股现改为直接扫 raw_articles 正文，此表可闲置。"""
+
+    __tablename__ = "ticker_mentions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    article_id: Mapped[str] = mapped_column(String(36), ForeignKey("raw_articles.id", ondelete="CASCADE"), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    source_name: Mapped[str] = mapped_column(String(100), default="")
+    mention_date: Mapped[str] = mapped_column(String(10), nullable=False, index=True)  # "2026-05-16"
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

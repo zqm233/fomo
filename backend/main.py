@@ -9,13 +9,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 from db.database import init_db
 from scheduler.tasks import start_scheduler, shutdown_scheduler
-from api import sources, reports, chat, pipeline, prompts
+from api import sources, reports, chat, pipeline, prompts, articles, tickers
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# ChromaDB posthog telemetry has a version mismatch that causes noisy errors — silence it
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
 settings = get_settings()
 
@@ -50,6 +53,8 @@ app.include_router(reports.router, prefix="/api/reports", tags=["简报"])
 app.include_router(chat.router, prefix="/api/chat", tags=["RAG 对话"])
 app.include_router(pipeline.router, prefix="/api/pipeline", tags=["流水线"])
 app.include_router(prompts.router, prefix="/api/prompts", tags=["Prompt 管理"])
+app.include_router(articles.router, prefix="/api/articles", tags=["文章库"])
+app.include_router(tickers.router, prefix="/api/tickers/hot", tags=["热门股池"])
 
 
 @app.get("/api/health", tags=["系统"])

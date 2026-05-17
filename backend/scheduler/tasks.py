@@ -3,10 +3,11 @@ from __future__ import annotations
 import logging
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 import pytz
 
 from config import get_settings
+from services.nyse_calendar import next_nyse_session_datetime_et
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -17,47 +18,73 @@ _ET = pytz.timezone("America/New_York")
 
 def _run_pre_market():
     from pipeline.daily_pipeline import run_pipeline
+
     logger.info("Scheduled pre-market pipeline triggered")
-    run_pipeline(report_type="pre")
+    try:
+        run_pipeline(report_type="pre")
+    finally:
+        _schedule_pre_market()
 
 
 def _run_post_market():
     from pipeline.daily_pipeline import run_pipeline
+
     logger.info("Scheduled post-market pipeline triggered")
-    run_pipeline(report_type="post")
+    try:
+        run_pipeline(report_type="post")
+    finally:
+        _schedule_post_market()
+
+
+def _schedule_pre_market() -> None:
+    if not _scheduler:
+        return
+    run_at = next_nyse_session_datetime_et(
+        settings.pre_market_hour,
+        settings.pre_market_minute,
+    )
+    _scheduler.add_job(
+        _run_pre_market,
+        trigger=DateTrigger(run_date=run_at, timezone=_ET),
+        id="pre_market",
+        name="盘前简报",
+        replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
+    )
+    logger.info("Next pre-market pipeline scheduled at %s", run_at.isoformat())
+
+
+def _schedule_post_market() -> None:
+    if not _scheduler:
+        return
+    run_at = next_nyse_session_datetime_et(
+        settings.post_market_hour,
+        settings.post_market_minute,
+    )
+    _scheduler.add_job(
+        _run_post_market,
+        trigger=DateTrigger(run_date=run_at, timezone=_ET),
+        id="post_market",
+        name="盘后简报",
+        replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
+    )
+    logger.info("Next post-market pipeline scheduled at %s", run_at.isoformat())
 
 
 def start_scheduler() -> None:
     global _scheduler
     _scheduler = BackgroundScheduler(timezone=_ET)
 
-    _scheduler.add_job(
-        _run_pre_market,
-        trigger=CronTrigger(
-            hour=settings.pre_market_hour,
-            minute=settings.pre_market_minute,
-            timezone=_ET,
-        ),
-        id="pre_market",
-        name="盘前简讯流水线",
-        replace_existing=True,
-    )
-
-    _scheduler.add_job(
-        _run_post_market,
-        trigger=CronTrigger(
-            hour=settings.post_market_hour,
-            minute=settings.post_market_minute,
-            timezone=_ET,
-        ),
-        id="post_market",
-        name="盘后复盘流水线",
-        replace_existing=True,
-    )
+    _schedule_pre_market()
+    _schedule_post_market()
 
     _scheduler.start()
     logger.info(
-        "Scheduler started — pre-market %02d:%02d ET, post-market %02d:%02d ET",
+        "Scheduler started — pre-market %02d:%02d ET, post-market %02d:%02d ET "
+        "(NYSE trading days only; daily retention purge runs after post-market pipeline)",
         settings.pre_market_hour,
         settings.pre_market_minute,
         settings.post_market_hour,

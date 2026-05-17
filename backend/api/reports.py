@@ -22,10 +22,24 @@ class ReportOut(BaseModel):
     stock_prices: dict
     summary_text: str
     article_count: int
+    source_digest: list[dict]
+    hot_pool: list[dict]
     created_at: str
 
 
 def _to_out(r: Report) -> ReportOut:
+    try:
+        source_digest = json.loads(r.source_digest_json or "[]")
+        if not isinstance(source_digest, list):
+            source_digest = []
+    except json.JSONDecodeError:
+        source_digest = []
+    try:
+        hot_pool = json.loads(r.hot_pool_json or "[]")
+        if not isinstance(hot_pool, list):
+            hot_pool = []
+    except json.JSONDecodeError:
+        hot_pool = []
     return ReportOut(
         id=r.id,
         report_date=r.report_date,
@@ -35,6 +49,8 @@ def _to_out(r: Report) -> ReportOut:
         stock_prices=json.loads(r.stock_prices_json),
         summary_text=r.summary_text,
         article_count=r.article_count,
+        source_digest=source_digest,
+        hot_pool=hot_pool,
         created_at=r.created_at.isoformat(),
     )
 

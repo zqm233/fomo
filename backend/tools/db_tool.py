@@ -68,12 +68,18 @@ def _save_report(data: dict) -> str:
             .filter(Report.report_date == report_date, Report.report_type == report_type)
             .first()
         )
+        digest = data.get("source_digest") or []
+        digest_json = json.dumps(digest, ensure_ascii=False)
+        hot_pool = data.get("hot_pool") or []
+        hot_pool_json = json.dumps(hot_pool, ensure_ascii=False)
         if existing:
             existing.sentiment_json = json.dumps(data.get("sentiment", {}), ensure_ascii=False)
             existing.hotspots_json = json.dumps(data.get("hotspots", {}), ensure_ascii=False)
             existing.stock_prices_json = json.dumps(data.get("stock_prices", {}), ensure_ascii=False)
             existing.summary_text = data.get("summary_text", "")
             existing.article_count = data.get("article_count", 0)
+            existing.source_digest_json = digest_json
+            existing.hot_pool_json = hot_pool_json
             report_id = existing.id
         else:
             report = Report(
@@ -84,6 +90,8 @@ def _save_report(data: dict) -> str:
                 stock_prices_json=json.dumps(data.get("stock_prices", {}), ensure_ascii=False),
                 summary_text=data.get("summary_text", ""),
                 article_count=data.get("article_count", 0),
+                source_digest_json=digest_json,
+                hot_pool_json=hot_pool_json,
             )
             db.add(report)
             report_id = report.id

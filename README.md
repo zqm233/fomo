@@ -114,43 +114,30 @@ make down
 
 ---
 
-## 部署后端到 Render
+## 部署后端到 Render（GHCR 镜像）
 
-仓库根目录已提供 [`render.yaml`](render.yaml)（Docker 蓝图）。要点：
+**GitHub Actions 构建并推送** `backend` 镜像到 GHCR，Render 使用 **Existing Image** 拉取运行（见 [`docker-build-deploy.yml`](.github/workflows/docker-build-deploy.yml)）。
 
-1. **在 Render**：New → **Blueprint**，连接本仓库并按提示创建 Web Service（或导入 `render.yaml`）。
-2. **构建上下文**：镜像使用 `backend/Dockerfile`，`dockerContext` 为 **`backend`**，与现有 Docker 构建一致。
-3. **端口**：平台会注入 **`PORT`**；镜像默认 `CMD` 使用 `${PORT:-8000}`；蓝图中 **`dockerCommand`** 在启动前执行 **`alembic upgrade head`** 再拉起 `uvicorn`。
-4. **环境变量（在 Dashboard 里填密钥类）**
+1. **确保 `main` 上 backend 相关改动能跑绿**：仅 **`backend/**` 变更**会 build/push 并（可选）触发 Render Deploy Hook；**只改 `frontend/**` 不会重部署后端**。
+2. **GHCR 包设为公开**，或在 Render 配置 **Registry credentials**（`ghcr.io` + `read:packages` PAT）。
+3. **Render**：**Web Service** → **Docker** → **Deploy an existing image**（不要选 Attach Git Repo 当构建源）。
+   - Image URL：`ghcr.io/<owner>/<repo>/backend:latest`（小写路径，以 Actions 日志为准）
+   - **Docker Command**：留空，使用镜像内 **`/app/scripts/docker-entrypoint.sh`**（`alembic` + `uvicorn`）
+   - **Health Check Path**：`/api/health`
+4. **环境变量（Render Dashboard）**
 
    | 变量 | 说明 |
    |------|------|
-   | `DATABASE_URL` | 推荐整串 Postgres URL（如 Supabase）；需含 `sslmode=require` |
-   | `OPENAI_API_KEY` | LLM + 向量（方舟下 `EMBEDDING_PROVIDER=ark`）；也可单独设 `ARK_API_KEY` |
-   | `CORS_ORIGINS` | 前端生产地址，逗号分隔，例如 `https://你的域名` |
-   | `EMBEDDING_PROVIDER` | 云上默认 **`ark`**（豆包多模态 embedding：`volcenginesdkarkruntime`）；本机 **`local`**=BGE；**`openai`**=兼容 `/embeddings` |
-   | `OPENAI_BASE_URL` | 方舟 **对话** LangChain/OpenAI 的根 URL；向量在 `ark` 模式下由 **Ark SDK 默认网关** 请求（一般不必再配置 Embedding URL，除非用 `ARK_API_BASE_URL` 覆盖）。 |
+   | `DATABASE_URL` | Supabase **Pooler** URI（`*.pooler.supabase.com:6543`），勿用直连 `db.*:5432` |
+   | `OPENAI_API_KEY` | LLM + 向量；也可 `ARK_API_KEY` |
+   | `CORS_ORIGINS` | 前端域名逗号分隔；`config.py` 会合并生产 Vercel 域名 |
+   | `EMBEDDING_PROVIDER` | 云上 **`ark`**；本机 **`local`**=BGE |
 
-   其余见 `backend/.env.example`（定时任务、`LLM_MODEL`、通知等按需配置）。
+   其余见 `backend/.env.example`。
 
-5. **健康检查**：路径 **`/api/health`**。
-6. **区域与档位**：按需编辑 `render.yaml` 里的 `region`、`plan`（如改为 `singapore`、`free` 等）。
+5. **自动部署**：GitHub `ENABLE_RENDER_DEPLOY_HOOK=true` + Secret `RENDER_DEPLOY_HOOK_URL`；否则每次 push 后端后需在 Render **Manual Deploy**。
 
-前端若部署在 **Vercel / 别处**，把该平台上的 `NEXT_PUBLIC_API_URL` 指到 Render 给出的 `https://<service>.onrender.com`。
-
-### 模式二：流水线打镜像 → GHCR → Render 拉取（与 Blueprint 二选一）
-
-与「Blueprint 直接在 Render 从你仓库里的 Dockerfile 构建」不同，另一种是 **先在 GitHub Actions 构建并推到 GHCR**，Render 只做 **运行时拉镜像**。
-
-1. **确保 `main` 推送能跑绿** [`.github/workflows/docker-build-deploy.yml`](.github/workflows/docker-build-deploy.yml)：Workflow 按目录分流——**只有 `backend/**` 变更**才会构建/推送后端镜像并（可选）触发 Render Deploy Hook；**只改 `frontend/**` 不会动后端**（前端走 Vercel）。未配置 `NEXT_PUBLIC_API_URL` 时不会构建 Docker 前端镜像。
-2. **把 GHCR 包设为公开**，或在 Render **Environment** 中为 `ghcr.io` 配置有读权限的 **Registry credential**。
-3. **Render**：新建 **Web Service** → **Docker** → **Deploy an existing image**（不要选 Attach Git Repo 当构建源）。
-   - Image URL：`ghcr.io/<你的 GitHub 用户名或组织>/<仓库名小写>/backend:latest`（或直接复制 Actions 日志里推送的 `:sha` 标签）。
-   - **Start Command**：留空即用镜像默认 **`/app/scripts/docker-entrypoint.sh`**（内含迁移 + uvicorn）。若曾手写 `uvicorn` 且报 not found，请删掉旧命令或改为该路径。
-   - Health check path：`/api/health`，环境变量同上一节表格。
-4. **每次 CI 打完新镜像**：在 Render Dashboard 对该服务 **Manual Deploy**，或在 GitHub 配置 **Deploy Hook**：仓库变量 `ENABLE_RENDER_DEPLOY_HOOK=true`，密钥 `RENDER_DEPLOY_HOOK_URL` = Render → Service → Manage → **Deploy Hook** 里的 URL。
-
-> 若不使用 Deploy Hook，`latest` 标签被覆盖后需在 Render **主动再部署**，平台才会重新拉镜像。
+前端部署在 **Vercel** 时设置 `NEXT_PUBLIC_API_URL=https://<你的-render服务>.onrender.com`（仓库内 `frontend/.env.production` 可作参考）。
 
 ---
 

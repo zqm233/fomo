@@ -1,36 +1,11 @@
-# 推送 main（或手动运行）时在 GHCR 构建 backend / frontend 镜像；可选 SSH 登录 VPS 更新容器。
+# 按目录分流：改 backend 才构建/推送后端镜像并（可选）触发 Render；改 frontend 不碰后端。
+# 前端生产部署走 Vercel；下方 frontend 镜像构建仅在你仍用 GHCR+VPS 全栈时需要。
 #
-# 使用前请在 GitHub 仓库配置：
+# Render Deploy Hook（仅在后端 job 成功时）：
+#   Variable  ENABLE_RENDER_DEPLOY_HOOK = true
+#   Secret    RENDER_DEPLOY_HOOK_URL
 #
-# ── Packages（推送镜像必需） ─────────────────────────────────────────────────
-# Workflow 默认有 packages: write，无需额外 Token。
-#
-# ── 仅后端上 Render / GHCR 时 ───────────────────────────────────────────────
-#   不配 NEXT_PUBLIC_API_URL 也可以：本会跳过前端镜像构建，只 push backend。
-#   Render 中选「Existing image」：`ghcr.io/<owner>/<repo>/backend:latest`（或小写仓库名）。
-#   镜像更新后需在 Render Dashboard 点 Deploy，或配置下方 Deploy Hook。
-#
-# ── 可选：流水线结束后触发 Render 重新拉镜像 ─────────────────────────────────
-#   Repository variable: ENABLE_RENDER_DEPLOY_HOOK = true
-#   Repository secret:   RENDER_DEPLOY_HOOK_URL   （Render Service → Manage → Deploy Hook）
-#
-# ── Repository variables（要构建 frontend 镜像时必需） ─────────────────────
-#   NEXT_PUBLIC_API_URL  浏览器能访问的后端 API 根地址（须含协议），例如：
-#
-# ── 可选：自动部署到 VPS ──────────────────────────────────────────────────────
-#   Repository variable: DEPLOY_TO_VPS = true
-#   Repository secrets:
-#     VPS_HOST        服务器域名或 IP
-#     VPS_USER        SSH 登录用户
-#     VPS_SSH_KEY     SSH 私钥全文（pem）
-#     VPS_APP_PATH    项目在服务器上的路径，含 docker-compose.deploy.yml（如 /home/ubuntu/fomo）
-#     VPS_GHCR_USER   与 PAT 对应的 GitHub 用户名（例如你的 login），仅私有包拉取需要
-#     VPS_GHCR_PULL   读取 GHCR 的 PAT：classic 勾选 read:packages；公有包可留空并跳过 login
-#
-# 服务器预先准备：
-#   - 安装 Docker Compose v2；PostgreSQL/pgvector 在宿主机或其它方式自行安装（多项目可共用）
-#   - VPS_APP_PATH 下保留 docker-compose.deploy.yml；backend/.env 中数据库分项（或 DATABASE_URL）、CORS_ORIGINS 指向实际库与前端域名
-#
+# 手动 Run workflow：会构建 backend（并可选 frontend 镜像），便于强制发布。
 
 name: Docker build / push / deploy
 
@@ -47,12 +22,29 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  build-and-push:
+  changes:
     runs-on: ubuntu-latest
     outputs:
-      backend_tag: ${{ steps.tags.outputs.backend_tag }}
-      frontend_tag: ${{ steps.tags.outputs.frontend_tag }}
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.github/workflows/docker-build-deploy.yml'
+            frontend:
+              - 'frontend/**'
 
+  build-backend:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true'
+    outputs:
+      backend_tag: ${{ steps.tags.outputs.backend_tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -65,7 +57,6 @@ jobs:
         run: |
           R="${{ steps.ns.outputs.repository_lower }}"
           echo "backend_tag=${{ env.REGISTRY }}/${R}/backend:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-          echo "frontend_tag=${{ env.REGISTRY }}/${R}/frontend:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -88,8 +79,56 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  render-deploy-hook:
+    runs-on: ubuntu-latest
+    needs: build-backend
+    if: |
+      needs.build-backend.result == 'success' &&
+      vars.ENABLE_RENDER_DEPLOY_HOOK == 'true'
+    steps:
+      - name: Trigger Render deploy hook
+        env:
+          HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          set -e
+          if [ -z "${HOOK_URL:-}" ]; then
+            echo "::error::ENABLE_RENDER_DEPLOY_HOOK is true but RENDER_DEPLOY_HOOK_URL secret is empty."
+            exit 1
+          fi
+          curl --fail-with-body -sS -X POST "${HOOK_URL}"
+
+  build-frontend-image:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: |
+      (github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true') &&
+      vars.NEXT_PUBLIC_API_URL != ''
+    outputs:
+      frontend_tag: ${{ steps.tags.outputs.frontend_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Registry namespace (GHCR requires lowercase path)
+        id: ns
+        run: echo "repository_lower=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Image tags for this revision
+        id: tags
+        run: |
+          R="${{ steps.ns.outputs.repository_lower }}"
+          echo "frontend_tag=${{ env.REGISTRY }}/${R}/frontend:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and push frontend
-        if: ${{ vars.NEXT_PUBLIC_API_URL != '' }}
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
@@ -102,28 +141,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Skip frontend image (NEXT_PUBLIC_API_URL not set)
-        if: ${{ vars.NEXT_PUBLIC_API_URL == '' }}
-        run: echo "Skipping frontend Docker build — set NEXT_PUBLIC_API_URL Actions variable to enable."
-
-      - name: Trigger Render deploy hook (optional)
-        if: ${{ vars.ENABLE_RENDER_DEPLOY_HOOK == 'true' }}
-        env:
-          HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-        run: |
-          set -e
-          if [ -z "${HOOK_URL:-}" ]; then
-            echo "::error::ENABLE_RENDER_DEPLOY_HOOK is true but RENDER_DEPLOY_HOOK_URL secret is empty."
-            exit 1
-          fi
-          curl --fail-with-body -sS -X POST "${HOOK_URL}"
-
-  deploy:
+  deploy-vps:
     runs-on: ubuntu-latest
-    needs: build-and-push
-    # 不配变量则仅构建镜像，不落服务器。VPS 全栈部署需要同时存在 frontend 镜像（见 workflow 首部说明）。
-    if: ${{ vars.DEPLOY_TO_VPS == 'true' && vars.NEXT_PUBLIC_API_URL != '' }}
-
+    needs: [build-backend, build-frontend-image]
+    # 仅当本次同时构建了 backend 与 frontend 镜像时更新 VPS（全栈 docker compose）
+    if: |
+      vars.DEPLOY_TO_VPS == 'true' &&
+      vars.NEXT_PUBLIC_API_URL != '' &&
+      needs.build-backend.result == 'success' &&
+      needs.build-frontend-image.result == 'success'
     steps:
       - uses: appleboy/ssh-action@v1.2.0
         with:
@@ -137,7 +163,7 @@ jobs:
               echo "${{ secrets.VPS_GHCR_PULL }}" | docker login ghcr.io -u "${{ secrets.VPS_GHCR_USER }}" --password-stdin
             fi
             cd "${{ secrets.VPS_APP_PATH }}"
-            export BACKEND_IMAGE="${{ needs.build-and-push.outputs.backend_tag }}"
-            export FRONTEND_IMAGE="${{ needs.build-and-push.outputs.frontend_tag }}"
+            export BACKEND_IMAGE="${{ needs.build-backend.outputs.backend_tag }}"
+            export FRONTEND_IMAGE="${{ needs.build-frontend-image.outputs.frontend_tag }}"
             docker compose --env-file .env -f docker-compose.deploy.yml pull
             docker compose --env-file .env -f docker-compose.deploy.yml up -d

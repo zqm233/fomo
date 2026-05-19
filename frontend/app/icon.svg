@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <linearGradient id="fg" x1="4" y1="28" x2="28" y2="4" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8b6cf8"/>
+      <stop offset="1" stop-color="#c4b5fd"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1a1a22"/>
+      <stop offset="1" stop-color="#121218"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="url(#bg)"/>
+  <text
+    x="16"
+    y="21"
+    text-anchor="middle"
+    fill="url(#fg)"
+    font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+    font-size="8.2"
+    font-weight="800"
+    letter-spacing="-0.55"
+  >FOMO</text>
+</svg>

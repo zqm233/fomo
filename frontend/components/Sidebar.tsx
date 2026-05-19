@@ -13,9 +13,9 @@ import {
   Moon,
   Settings,
   Sun,
-  TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { BrandIcon } from "@/lib/brand-icon";
 
 const navItems = [
   { href: "/reports",  label: "投研简报",   icon: FileText },
@@ -35,9 +35,7 @@ export function Sidebar() {
     <aside className="relative z-20 w-56 shrink-0 flex flex-col bg-card border-r border-border">
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-5 py-4 border-b border-border/40">
-        <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-primary/15 ring-1 ring-primary/30">
-          <TrendingUp className="h-4 w-4 text-primary" />
-        </div>
+        <BrandIcon size={28} className="shrink-0" />
         <span className="text-base font-bold tracking-tight">FOMO</span>
         <span className="text-xs text-muted-foreground ml-auto">美股投研</span>
       </div>

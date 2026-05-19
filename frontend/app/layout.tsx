@@ -18,6 +18,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "FOMO — 美股 AI 投研系统",
   description: "AI-powered US stock market research platform",
+  applicationName: "FOMO",
 };
 
 export default function RootLayout({

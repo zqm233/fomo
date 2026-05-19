@@ -25,7 +25,7 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: CORS_ORIGINS
-        value: "http://localhost:3000,http://127.0.0.1:3000,https://fomo-gdtbw0gls-zqm757438407-6238s-projects.vercel.app"
+        value: "http://localhost:3000,http://127.0.0.1:3000,https://fomo-delta-azure.vercel.app"
       # 火山方舟：`ark` → .../embeddings/multimodal + 豆包多模态模型；与 LLM 共用 OPENAI_API_KEY / OPENAI_BASE_URL
       - key: EMBEDDING_PROVIDER
         value: ark

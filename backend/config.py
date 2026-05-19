@@ -79,7 +79,7 @@ _DEFAULT_CHAT_MODEL = "doubao-seed-2-0-mini-260428"
 
 # Production Vercel app; merged into cors_origins even when CORS_ORIGINS env is set.
 _VERCEL_FRONTEND_ORIGIN = (
-    "https://fomo-gdtbw0gls-zqm757438407-6238s-projects.vercel.app"
+    "https://fomo-delta-azure.vercel.app"
 )
 
 

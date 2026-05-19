@@ -5,6 +5,7 @@ import html
 import io
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -12,6 +13,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import feedparser
 import requests
 from bs4 import BeautifulSoup
+
+from config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,9 @@ _RENDER_WAKE_MARKERS = (
     b"application loading",
     b"service waking up",
 )
+
+# SaaS 公众号 RSS：云主机直连常被 Cloudflare 403，改走 Vercel 边缘代拉
+_EDGE_FETCH_HOSTS = frozenset({"wechatrss.waytomaster.com"})
 
 
 def _uses_rsshub_limit(url: str) -> bool:
@@ -85,7 +91,7 @@ def _format_http_error(status_code: int, content_type: str, body: bytes) -> str:
     if snippet and "json" in (content_type or "").lower():
         base += f" — {snippet[:200]}"
     elif status_code == 403 and (b"cloudflare" in (body or b"").lower() or "html" in (content_type or "").lower()):
-        base += " — 可能被 CDN 拦截（云主机 IP）。本地网络可试；或自托管 WeChat RSS"
+        base += " — 云主机 IP 被 CDN 拦截；公众号源应经 Vercel 代拉，请确认前端已部署"
     elif status_code in (401, 403):
         base += " — 请检查订阅链接里的 token 是否有效、未过期"
     return base
@@ -149,6 +155,70 @@ def _is_render_wake_page(payload: bytes, content_type: str) -> bool:
     return "html" in ctype and b"<rss" not in head and b"<feed" not in head
 
 
+@dataclass
+class _HttpFetch:
+    ok: bool
+    payload: bytes
+    content_type: str
+    final_url: str
+    status_code: int
+    response_headers: dict[str, str]
+
+
+def _uses_edge_fetch(url: str) -> bool:
+    return urlparse(url).netloc.lower() in _EDGE_FETCH_HOSTS
+
+
+def _fetch_direct(url: str, headers: dict[str, str]) -> _HttpFetch:
+    r = requests.get(
+        url,
+        headers=headers,
+        timeout=_FETCH_TIMEOUT_SEC,
+        allow_redirects=True,
+        trust_env=False,
+    )
+    ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip()
+    return _HttpFetch(
+        ok=r.ok,
+        payload=r.content or b"",
+        content_type=ctype,
+        final_url=r.url,
+        status_code=r.status_code,
+        response_headers=dict(r.headers),
+    )
+
+
+def _fetch_via_vercel_edge(url: str, headers: dict[str, str]) -> _HttpFetch:
+    endpoint = get_settings().rss_edge_fetch_url
+    r = requests.post(
+        endpoint,
+        json={"url": url, "headers": headers},
+        timeout=_FETCH_TIMEOUT_SEC,
+        trust_env=False,
+    )
+    ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip()
+    logger.info(
+        "RSS edge fetch host=%s status=%s via %s",
+        urlparse(url).netloc,
+        r.status_code,
+        urlparse(endpoint).netloc,
+    )
+    return _HttpFetch(
+        ok=r.ok,
+        payload=r.content or b"",
+        content_type=ctype,
+        final_url=url,
+        status_code=r.status_code,
+        response_headers=dict(r.headers),
+    )
+
+
+def _fetch_rss_http(url: str, headers: dict[str, str]) -> _HttpFetch:
+    if _uses_edge_fetch(url):
+        return _fetch_via_vercel_edge(url, headers)
+    return _fetch_direct(url, headers)
+
+
 class RssCrawlResult:
     def __init__(self, articles: list[dict], error: Optional[str] = None):
         self.articles = articles
@@ -184,28 +254,25 @@ def crawl_rss(feed_url: str, count: int = _DEFAULT_RSS_ITEM_COUNT) -> RssCrawlRe
     headers = _rss_request_headers(fetch_url)
 
     try:
-        r = requests.get(
-            fetch_url,
-            headers=headers,
-            timeout=_FETCH_TIMEOUT_SEC,
-            allow_redirects=True,
-        )
-        final_url = r.url
-        ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip()
-        if not r.ok:
-            logger.warning(
-                "RSS HTTP error host=%s status=%s url=%s",
-                urlparse(final_url).netloc,
-                r.status_code,
-                _redact_url_for_log(final_url),
-            )
-            return RssCrawlResult(
-                articles=[],
-                error=_format_http_error(r.status_code, ctype, r.content or b""),
-            )
-        payload = r.content or b""
+        fetched = _fetch_rss_http(fetch_url, headers)
     except requests.RequestException as e:
         return RssCrawlResult(articles=[], error=f"拉取 RSS 失败: {e}")
+
+    final_url = fetched.final_url
+    ctype = fetched.content_type
+    if not fetched.ok:
+        logger.warning(
+            "RSS HTTP error host=%s status=%s url=%s edge=%s",
+            urlparse(final_url).netloc,
+            fetched.status_code,
+            _redact_url_for_log(final_url),
+            _uses_edge_fetch(fetch_url),
+        )
+        return RssCrawlResult(
+            articles=[],
+            error=_format_http_error(fetched.status_code, ctype, fetched.payload),
+        )
+    payload = fetched.payload
 
     if not payload or not payload.strip():
         return RssCrawlResult(articles=[], error="RSS 正文为空")
@@ -219,7 +286,7 @@ def crawl_rss(feed_url: str, count: int = _DEFAULT_RSS_ITEM_COUNT) -> RssCrawlRe
     try:
         feed = feedparser.parse(
             io.BytesIO(payload),
-            response_headers=dict(r.headers),
+            response_headers=fetched.response_headers,
         )
     except Exception as e:
         return RssCrawlResult(articles=[], error=f"解析 RSS 失败: {e}")

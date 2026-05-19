@@ -162,6 +162,14 @@ class Settings:
         ).strip()
         return raw.rstrip("/")
 
+    # --- 公众号 RSS（waytomaster）：Render IP 常被 CF 403，改由 Vercel 代拉 ---
+    @property
+    def rss_edge_fetch_url(self) -> str:
+        raw = os.getenv("RSS_EDGE_FETCH_URL", "").strip()
+        if raw:
+            return raw.rstrip("/")
+        return f"{_VERCEL_FRONTEND_ORIGIN.rstrip('/')}/api/internal/rss-fetch"
+
     # --- 定时任务（美东；数值由 scheduler 解释）---
     pre_market_hour: int = int(os.getenv("PRE_MARKET_HOUR", "8"))
     pre_market_minute: int = int(os.getenv("PRE_MARKET_MINUTE", "30"))

@@ -9,6 +9,16 @@ import { LineChart, Line, ResponsiveContainer, Tooltip } from "recharts";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
+function formatSparkPrice(value: unknown): [string, string] {
+  const n =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : 0;
+  return [`$${(Number.isFinite(n) ? n : 0).toFixed(2)}`, ""];
+}
+
 // ── Sparkline ──────────────────────────────────────────────────────────────────
 
 function Sparkline({ data, positive }: { data: number[]; positive: boolean }) {
@@ -28,7 +38,7 @@ function Sparkline({ data, positive }: { data: number[]; positive: boolean }) {
           <Tooltip
             contentStyle={{ fontSize: 11, padding: "2px 6px", background: "#1e1e2e", border: "none", borderRadius: 4 }}
             labelFormatter={() => ""}
-            formatter={(v: number) => [`$${v.toFixed(2)}`, ""]}
+            formatter={formatSparkPrice}
           />
         </LineChart>
       </ResponsiveContainer>

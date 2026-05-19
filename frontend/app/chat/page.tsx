@@ -59,7 +59,7 @@ export default function ChatPage() {
       const history = await chatApi.getHistory(sid);
       setSessionId(sid);
       setMessages(
-        history.map((m: ChatMessage) => ({ role: m.role as "user" | "assistant", content: m.content }))
+        history.map((m: ChatMessage) => ({ role: m.role, content: m.content }))
       );
     } catch { /* ignore */ }
   };

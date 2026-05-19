@@ -173,11 +173,6 @@ export interface Prompt {
   created_at: string;
 }
 
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
 // ── Public meta (SPA hints, no secrets) ───────────────────────────────────
 
 export const metaApi = {
@@ -302,7 +297,7 @@ export interface ChatSession {
 export interface ChatMessage {
   id: string;
   session_id: string;
-  role: string;
+  role: "user" | "assistant";
   content: string;
   created_at: string;
 }

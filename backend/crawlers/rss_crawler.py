@@ -175,7 +175,6 @@ def _fetch_direct(url: str, headers: dict[str, str]) -> _HttpFetch:
         headers=headers,
         timeout=_FETCH_TIMEOUT_SEC,
         allow_redirects=True,
-        trust_env=False,
     )
     ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip()
     return _HttpFetch(
@@ -194,7 +193,6 @@ def _fetch_via_vercel_edge(url: str, headers: dict[str, str]) -> _HttpFetch:
         endpoint,
         json={"url": url, "headers": headers},
         timeout=_FETCH_TIMEOUT_SEC,
-        trust_env=False,
     )
     ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip()
     logger.info(

@@ -77,6 +77,11 @@ def _embedding_provider() -> str:
 _DEFAULT_CHAT_BASE = "https://ark.cn-beijing.volces.com/api/v3"
 _DEFAULT_CHAT_MODEL = "doubao-seed-2-0-mini-260428"
 
+# Production Vercel app; merged into cors_origins even when CORS_ORIGINS env is set.
+_VERCEL_FRONTEND_ORIGIN = (
+    "https://fomo-gdtbw0gls-zqm757438407-6238s-projects.vercel.app"
+)
+
 
 class Settings:
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
@@ -137,14 +142,16 @@ class Settings:
     wecom_webhook_url: str = os.getenv("WECOM_WEBHOOK_URL", "")
 
     # --- HTTP ---
-    cors_origins: list[str] = [
-        o.strip()
-        for o in os.getenv(
+    @property
+    def cors_origins(self) -> list[str]:
+        raw = os.getenv(
             "CORS_ORIGINS",
             "http://localhost:3000,http://127.0.0.1:3000",
-        ).split(",")
-        if o.strip()
-    ]
+        )
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+        if _VERCEL_FRONTEND_ORIGIN not in origins:
+            origins.append(_VERCEL_FRONTEND_ORIGIN)
+        return origins
 
     # --- RSS 表单预设：RSSHub「Twitter 用户」订阅前缀（无尾斜杠）---
     @property

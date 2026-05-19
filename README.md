@@ -142,7 +142,7 @@ make down
 
 与「Blueprint 直接在 Render 从你仓库里的 Dockerfile 构建」不同，另一种是 **先在 GitHub Actions 构建并推到 GHCR**，Render 只做 **运行时拉镜像**。
 
-1. **确保 `main` 推送能跑绿** [`.github/workflows/docker-build-deploy.yml`](.github/workflows/docker-build-deploy.yml)：未配置 `NEXT_PUBLIC_API_URL` 时只会构建并推送 **`backend`** 镜像（`ghcr.io/<小写仓库名>/backend:latest` 与 `:sha`），不会构建前端镜像。
+1. **确保 `main` 推送能跑绿** [`.github/workflows/docker-build-deploy.yml`](.github/workflows/docker-build-deploy.yml)：Workflow 按目录分流——**只有 `backend/**` 变更**才会构建/推送后端镜像并（可选）触发 Render Deploy Hook；**只改 `frontend/**` 不会动后端**（前端走 Vercel）。未配置 `NEXT_PUBLIC_API_URL` 时不会构建 Docker 前端镜像。
 2. **把 GHCR 包设为公开**，或在 Render **Environment** 中为 `ghcr.io` 配置有读权限的 **Registry credential**。
 3. **Render**：新建 **Web Service** → **Docker** → **Deploy an existing image**（不要选 Attach Git Repo 当构建源）。
    - Image URL：`ghcr.io/<你的 GitHub 用户名或组织>/<仓库名小写>/backend:latest`（或直接复制 Actions 日志里推送的 `:sha` 标签）。

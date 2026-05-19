@@ -135,9 +135,11 @@ make down
 
    其余见 `backend/.env.example`。
 
-5. **自动部署**：GitHub `ENABLE_RENDER_DEPLOY_HOOK=true` + Secret `RENDER_DEPLOY_HOOK_URL`；否则每次 push 后端后需在 Render **Manual Deploy**。
+5. **自动部署 Render**：GitHub Variable `ENABLE_RENDER_DEPLOY_HOOK=true` + Secret `RENDER_DEPLOY_HOOK_URL`；否则 push 后端后需在 Render **Manual Deploy**。
 
-前端部署在 **Vercel** 时设置 `NEXT_PUBLIC_API_URL=https://<你的-render服务>.onrender.com`（仓库内 `frontend/.env.production` 可作参考）。
+## 部署前端到 Vercel
+
+Vercel 导入仓库并连接 Git（**Root Directory** = `frontend`），push 到 `main` 后自动部署。设置 `NEXT_PUBLIC_API_URL=https://<render服务>.onrender.com`（或沿用 `frontend/.env.production`）。前端不在 GitHub Actions 流水线中触发。
 
 ---
 

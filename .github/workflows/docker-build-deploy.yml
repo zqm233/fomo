@@ -1,7 +1,7 @@
-# 按目录分流：改 backend 才构建/推送后端镜像并（可选）触发 Render；改 frontend 不碰后端。
-# 前端生产部署走 Vercel（不在此 workflow 里构建前端镜像）。
+# 按目录分流：改 backend/** 才构建 GHCR 镜像并（可选）触发 Render。
+# 前端由 Vercel 连 Git 自动部署，不在此 workflow 中处理。
 #
-# Render Deploy Hook（仅在后端 job 成功时）：
+# Render（仅 build-backend 成功后）：
 #   Variable  ENABLE_RENDER_DEPLOY_HOOK = true
 #   Secret    RENDER_DEPLOY_HOOK_URL
 #

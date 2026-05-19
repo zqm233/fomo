@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 from db.database import init_db
 from scheduler.tasks import start_scheduler, shutdown_scheduler
+from services.rsshub_wake import schedule_rsshub_wake_on_startup
 from api import sources, meta, reports, chat, pipeline, prompts, articles, tickers
 
 logging.basicConfig(
@@ -37,6 +38,7 @@ async def lifespan(app: FastAPI):
     logger.info("Database layer ready — starting scheduler…")
     start_scheduler()
     log_model_config()
+    schedule_rsshub_wake_on_startup()
     logger.info("Startup complete.")
     yield
     logger.info("Shutting down FOMO backend…")

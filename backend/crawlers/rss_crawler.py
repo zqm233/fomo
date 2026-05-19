@@ -21,8 +21,19 @@ _RSS_FETCH_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 _FETCH_TIMEOUT_SEC = (15, 75)  # connect, read — 外层 pipeline 有约 90s 上限 / 源
-# RSSHub：在请求 URL 上带 `limit` 可少拉条目、减轻负载；与本地下游截断保持一致
 _DEFAULT_RSS_ITEM_COUNT = 10
+
+_RENDER_WAKE_MARKERS = (
+    b"welcome to render",
+    b"application loading",
+    b"service waking up",
+)
+
+
+def _uses_rsshub_limit(url: str) -> bool:
+    """仅 RSSHub 识别 ``limit``；公众号等带 token 的源不能改 query，否则会 403。"""
+    host = urlparse(url).netloc.lower()
+    return host.endswith(".onrender.com") or "rsshub" in host
 
 
 def _feed_url_with_rsshub_limit(url: str, limit: int) -> str:
@@ -34,6 +45,52 @@ def _feed_url_with_rsshub_limit(url: str, limit: int) -> str:
     return urlunparse((p.scheme, p.netloc, p.path, p.params, query, p.fragment))
 
 
+def _resolve_fetch_url(url: str, limit: int) -> str:
+    if _uses_rsshub_limit(url):
+        return _feed_url_with_rsshub_limit(url, limit)
+    return url
+
+
+def _rss_request_headers(url: str) -> dict[str, str]:
+    p = urlparse(url)
+    origin = f"{p.scheme}://{p.netloc}"
+    return {
+        "User-Agent": _RSS_FETCH_UA,
+        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en-US,en;q=0.8",
+        "Referer": f"{origin}/",
+        "Origin": origin,
+    }
+
+
+def _redact_url_for_log(url: str) -> str:
+    p = urlparse(url)
+    if not p.query:
+        return url
+    pairs = []
+    for k, v in parse_qsl(p.query, keep_blank_values=True):
+        if k.lower() in ("token", "key", "api_key", "apikey", "k"):
+            pairs.append((k, "***"))
+        else:
+            pairs.append((k, v))
+    query = urlencode(pairs)
+    return urlunparse((p.scheme, p.netloc, p.path, p.params, query, p.fragment))
+
+
+def _format_http_error(status_code: int, content_type: str, body: bytes) -> str:
+    base = f"拉取 RSS 失败: HTTP {status_code}"
+    if content_type:
+        base += f" ({content_type})"
+    snippet = (body or b"")[:500].decode("utf-8", errors="replace").strip()
+    if snippet and "json" in (content_type or "").lower():
+        base += f" — {snippet[:200]}"
+    elif status_code == 403 and (b"cloudflare" in (body or b"").lower() or "html" in (content_type or "").lower()):
+        base += " — 可能被 CDN 拦截（云主机 IP）。本地网络可试；或自托管 WeChat RSS"
+    elif status_code in (401, 403):
+        base += " — 请检查订阅链接里的 token 是否有效、未过期"
+    return base
+
+
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).digest().hex()
 
@@ -42,20 +99,12 @@ _BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6",
 
 
 def _clean_html(raw: str) -> str:
-    """Convert HTML (including WeChat mdnice editor output) to clean plain text.
-
-    Strategy:
-    - Insert newlines before block-level tags so paragraphs are preserved
-    - Strip all remaining tags and inline styles
-    - Unescape HTML entities (&amp; &nbsp; etc.)
-    - Collapse excessive blank lines
-    """
+    """Convert HTML (including WeChat mdnice editor output) to clean plain text."""
     if not raw:
         return ""
 
     soup = BeautifulSoup(raw, "lxml")
 
-    # Insert newline markers before block elements so we don't lose paragraph breaks
     for tag in soup.find_all(_BLOCK_TAGS):
         tag.insert_before("\n")
         tag.append("\n")
@@ -63,9 +112,7 @@ def _clean_html(raw: str) -> str:
     text = soup.get_text(separator="")
     text = html.unescape(text)
 
-    # Collapse runs of spaces/tabs on a single line
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
-    # Remove empty lines produced by pure-whitespace content, but keep single blank line between paragraphs
     cleaned: list[str] = []
     prev_blank = False
     for line in lines:
@@ -92,6 +139,16 @@ def _parse_date(entry) -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _is_render_wake_page(payload: bytes, content_type: str) -> bool:
+    if not payload:
+        return False
+    head = payload[:8192].lower()
+    if any(marker in head for marker in _RENDER_WAKE_MARKERS):
+        return True
+    ctype = (content_type or "").lower()
+    return "html" in ctype and b"<rss" not in head and b"<feed" not in head
+
+
 class RssCrawlResult:
     def __init__(self, articles: list[dict], error: Optional[str] = None):
         self.articles = articles
@@ -104,8 +161,7 @@ def crawl_rss(feed_url: str, count: int = _DEFAULT_RSS_ITEM_COUNT) -> RssCrawlRe
     Fetch and parse an RSS / Atom feed.
     Returns articles as dicts with keys: content, url, author, published_at, content_hash.
 
-    抓取前会做 URL strip；请求使用合并了 ``limit=<count>`` 的完整 URL（覆盖已有同名 query），默认 10。
-    RSSHub 会据此限条数；其它源通常忽略未知的 ``limit`` 参数。
+    抓取前会做 URL strip。仅 RSSHub 类地址会追加 ``limit``；公众号等 token 链接保持原样。
     """
     effective_count = max(1, min(count, 100))
     normalized = (feed_url or "").strip().strip("\ufeff")
@@ -119,18 +175,13 @@ def crawl_rss(feed_url: str, count: int = _DEFAULT_RSS_ITEM_COUNT) -> RssCrawlRe
             error="RSS 地址须以 http/https 开头（请勿在链接前多出空格或非 ASCII 符号）",
         )
 
-    fetch_url = _feed_url_with_rsshub_limit(normalized, effective_count)
+    fetch_url = _resolve_fetch_url(normalized, effective_count)
 
     payload: bytes | None = None
     ctype: str = ""
     final_url = fetch_url
 
-    headers = {
-        "User-Agent": _RSS_FETCH_UA,
-        # 与 feedparser 默认一致：鼓励返回 XML/RSS，而非 HTML 占位页
-        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
-    }
+    headers = _rss_request_headers(fetch_url)
 
     try:
         r = requests.get(
@@ -142,12 +193,15 @@ def crawl_rss(feed_url: str, count: int = _DEFAULT_RSS_ITEM_COUNT) -> RssCrawlRe
         final_url = r.url
         ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip()
         if not r.ok:
+            logger.warning(
+                "RSS HTTP error host=%s status=%s url=%s",
+                urlparse(final_url).netloc,
+                r.status_code,
+                _redact_url_for_log(final_url),
+            )
             return RssCrawlResult(
                 articles=[],
-                error=(
-                    f"拉取 RSS 失败: HTTP {r.status_code}"
-                    + (f" ({ctype})" if ctype else "")
-                ),
+                error=_format_http_error(r.status_code, ctype, r.content or b""),
             )
         payload = r.content or b""
     except requests.RequestException as e:
@@ -155,6 +209,12 @@ def crawl_rss(feed_url: str, count: int = _DEFAULT_RSS_ITEM_COUNT) -> RssCrawlRe
 
     if not payload or not payload.strip():
         return RssCrawlResult(articles=[], error="RSS 正文为空")
+
+    if _is_render_wake_page(payload, ctype):
+        return RssCrawlResult(
+            articles=[],
+            error="RSSHub 仍在启动（Render 冷启动），请稍后再试一次拉取",
+        )
 
     try:
         feed = feedparser.parse(
@@ -173,7 +233,6 @@ def crawl_rss(feed_url: str, count: int = _DEFAULT_RSS_ITEM_COUNT) -> RssCrawlRe
         title = entry.get("title", "").strip()
         url = entry.get("link", "").strip()
 
-        # Content: prefer summary/content over title-only
         raw_html = ""
         if entry.get("content"):
             raw_html = entry["content"][0].get("value", "")
@@ -182,15 +241,13 @@ def crawl_rss(feed_url: str, count: int = _DEFAULT_RSS_ITEM_COUNT) -> RssCrawlRe
 
         body = _clean_html(raw_html)
 
-        # RSSHub Twitter feeds use the tweet's first sentence as <title>,
-        # so the body already contains the full text. Avoid duplicating it.
         if body:
             norm_title = re.sub(r"\s+", "", title[:40])
-            norm_body  = re.sub(r"\s+", "", body[:40])
+            norm_body = re.sub(r"\s+", "", body[:40])
             content = body if norm_title == norm_body else f"{title}\n\n{body}"
         else:
             content = title
-        content = content[:12000]  # chunker will split further; keep more context
+        content = content[:12000]
 
         if not content.strip() or not url:
             continue
@@ -203,15 +260,15 @@ def crawl_rss(feed_url: str, count: int = _DEFAULT_RSS_ITEM_COUNT) -> RssCrawlRe
             "url": url,
             "author": author,
             "published_at": published_at,
-            "content_hash": _sha256(url),  # hash URL, not full content
+            "content_hash": _sha256(url),
         })
 
     log_host = urlparse(final_url).netloc or "(unknown-host)"
     logger.info(
-        "Crawled %d articles from RSS host=%s (final_url_scheme=%s status_bytes=%s)",
+        "Crawled %d articles from RSS host=%s url=%s bytes=%s",
         len(articles),
         log_host,
-        urlparse(final_url).scheme or "?",
+        _redact_url_for_log(final_url),
         len(payload) if payload is not None else 0,
     )
     return RssCrawlResult(articles=articles)

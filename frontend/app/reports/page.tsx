@@ -8,7 +8,7 @@ import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, FileText, Sun, Sunset, Play, FlaskConical } from "lucide-react";
+import { Loader2, FileText, Sun, Sunset, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -61,15 +61,11 @@ export default function ReportsPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleTrigger = async (type: "pre" | "post", skipCrawl = false) => {
+  const handleTrigger = async (type: "pre" | "post") => {
     try {
-      const { job_id } = await pipelineApi.trigger(type, { skip_crawl: skipCrawl });
+      const { job_id } = await pipelineApi.trigger(type);
       startPolling(job_id);
-      toast.success(
-        skipCrawl
-          ? `${type === "pre" ? "盘前" : "盘后"}简报生成中（不拉新数据，用库内简讯 + 新鲜行情）…`
-          : `${type === "pre" ? "盘前" : "盘后"}简报生成中…`
-      );
+      toast.success(`${type === "pre" ? "盘前" : "盘后"}简报生成中…`);
     } catch (e: unknown) {
       toast.error((e as Error).message);
     }
@@ -115,7 +111,7 @@ export default function ReportsPage() {
               variant="outline"
               className="h-7 text-xs gap-1"
               disabled={isPolling}
-              onClick={() => handleTrigger(t.value, false)}
+              onClick={() => handleTrigger(t.value)}
             >
               {isPolling
                 ? <Loader2 className="h-3 w-3 animate-spin" />
@@ -124,28 +120,6 @@ export default function ReportsPage() {
               {t.label}
             </Button>
           ))}
-          <Button
-            size="sm"
-            variant="secondary"
-            className="h-7 text-xs gap-1"
-            title="临时：不抓取 RSS/新推文，只用库里已有简讯；仍会拉取最新股价与盘面数据"
-            disabled={isPolling}
-            onClick={() => handleTrigger("pre", true)}
-          >
-            {isPolling ? <Loader2 className="h-3 w-3 animate-spin" /> : <FlaskConical className="h-3 w-3" />}
-            盘前(不拉新)
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            className="h-7 text-xs gap-1"
-            title="临时：不抓取 RSS/新推文，只用库里已有简讯；仍会拉取最新股价与盘面数据"
-            disabled={isPolling}
-            onClick={() => handleTrigger("post", true)}
-          >
-            {isPolling ? <Loader2 className="h-3 w-3 animate-spin" /> : <FlaskConical className="h-3 w-3" />}
-            盘后(不拉新)
-          </Button>
         </div>
       </div>
 

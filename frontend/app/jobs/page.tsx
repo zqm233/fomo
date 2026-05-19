@@ -11,7 +11,6 @@ import {
   CheckCircle2,
   Clock,
   Loader2,
-  Play,
   RefreshCw,
   RotateCcw,
   Rss,
@@ -229,10 +228,10 @@ function TaskRow({
 
       {/* Actions — show on hover */}
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-        {isFailed && onRetry && (
+        {(isSuccess || isFailed) && onRetry && (
           <button
             onClick={() => onRetry(task)}
-            title="重试"
+            title="重新运行"
             className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
           >
             <RotateCcw className="h-3.5 w-3.5" />
@@ -478,7 +477,6 @@ function SchedulerPanel() {
 export default function JobsPage() {
   const [jobs, setJobs] = useState<JobStatus[]>([]);
   const [loading, setLoading] = useState(true);
-  const [triggering, setTriggering] = useState(false);
 
   const loadJobs = useCallback(async () => {
     try {
@@ -500,19 +498,6 @@ export default function JobsPage() {
     return () => clearInterval(id);
   }, [activeJob, loadJobs]);
 
-  const handleTrigger = async () => {
-    setTriggering(true);
-    try {
-      await pipelineApi.trigger("manual");
-      toast.success("全源数据同步已启动");
-      await loadJobs();
-    } catch (e: unknown) {
-      toast.error((e as Error).message);
-    } finally {
-      setTriggering(false);
-    }
-  };
-
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -528,12 +513,6 @@ export default function JobsPage() {
           <Button size="sm" variant="outline" onClick={loadJobs}>
             <RefreshCw className="h-3 w-3 mr-1" />
             刷新
-          </Button>
-          <Button size="sm" onClick={handleTrigger} disabled={triggering || !!activeJob}>
-            {triggering
-              ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
-              : <Play className="h-3 w-3 mr-1" />}
-            全源同步
           </Button>
         </div>
       </div>
@@ -572,9 +551,6 @@ export default function JobsPage() {
             <div className="text-center py-16 text-muted-foreground">
               <Activity className="h-10 w-10 mx-auto mb-3 opacity-30" />
               <p>尚无任务记录</p>
-              <Button className="mt-4" onClick={handleTrigger}>
-                <Play className="h-3 w-3 mr-1" /> 立即触发
-              </Button>
             </div>
           )}
         </>

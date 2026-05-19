@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 from db.database import init_db
 from scheduler.tasks import start_scheduler, shutdown_scheduler
-from api import sources, reports, chat, pipeline, prompts, articles, tickers
+from api import sources, meta, reports, chat, pipeline, prompts, articles, tickers
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,17 +17,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ChromaDB posthog telemetry has a version mismatch that causes noisy errors — silence it
-logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
-
 settings = get_settings()
+
+
+def log_model_config() -> None:
+    """Log resolved model IDs once at startup (English; avoids duplicating scheduler lines)."""
+    s = get_settings()
+    ck = s.llm_kwargs
+    lk = s.lite_llm_kwargs
+    logger.info("LLM chat model: %s", ck.get("model"))
+    logger.info("LLM lite model: %s", lk.get("model"))
+    logger.info("Embedding model: %s", s.embedding_model)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting FOMO backend…")
     init_db()
+    logger.info("Database layer ready — starting scheduler…")
     start_scheduler()
+    log_model_config()
+    logger.info("Startup complete.")
     yield
     logger.info("Shutting down FOMO backend…")
     shutdown_scheduler()
@@ -48,6 +58,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(meta.router, prefix="/api/meta", tags=["Meta"])
 app.include_router(sources.router, prefix="/api/sources", tags=["数据源"])
 app.include_router(reports.router, prefix="/api/reports", tags=["简报"])
 app.include_router(chat.router, prefix="/api/chat", tags=["RAG 对话"])

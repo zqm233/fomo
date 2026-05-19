@@ -6,7 +6,7 @@ from typing import List, Optional
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from vector_store.chroma_store import query_documents
+from vector_store.pg_store import query_documents
 
 logger = logging.getLogger(__name__)
 

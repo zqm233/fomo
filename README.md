@@ -2,7 +2,21 @@
 
 > 个人投研 + AI Agent 求职作品集项目
 
-基于 LangChain + FastAPI + Next.js 的全栈 AI 投研系统，自动爬取推特财经博主和微信公众号文章，通过向量知识库和大模型生成每日盘前/盘后简报，并提供 RAG 对话窗口。
+### FOMO（美股财经投研 AI 全栈，LangChain 多 Agent + RAG），[https://github.com/zqm233/fomo](https://github.com/zqm233/fomo)
+
+#### 项目描述
+
+面向美股资讯与投研自动化的个人全栈作品：以 **RSS 财经源** 为入口，经解析去重与 **Chroma 向量库** 沉淀知识，配合 **LangChain 多 Agent** 做情绪 / 热点 / 总结分析并生成每日简报；前端用 **Next.js** 聚合数据源、简报、文章库、流水线任务与 **SSE 流式 RAG 对话**，后端 **FastAPI + APScheduler** 负责定时流水线与行情联动展示。
+
+#### 工作内容：
+
+- **每日流水线编排**：RSS 爬取 → 解析去重 → 向量化入库 → 情绪 / 热点 / 总结 Agent 顺序产出报告；集成热门标的池、文章留存清理与美股市历/行情快照（指数与个股联动简报）。
+- **RAG 与工具层**：按数据源划分 Chroma Collection，检索 Tool + DB 读写；聊天接口 **SSE** 流式返回。
+- **数据与部署**：**SQLAlchemy + Alembic** 管理 schema；SQLite 持久化；**uv** 锁依赖、**Makefile** 本地/Docker 一键流程。
+
+#### 技术栈
+
+Python / FastAPI / Next.js / TypeScript / LangChain / Chroma / SQLAlchemy / Alembic / APScheduler / Tailwind CSS / uv
 
 ---
 
@@ -10,7 +24,7 @@
 
 | 功能 | 说明 |
 |------|------|
-| 自动爬取 | 推特 (x-tweet-fetcher) + 微信公众号，定时爬取 |
+| 自动爬取 | RSS 源定时拉取，流水线内解析去重 |
 | 向量知识库 | Chroma，每数据源独立 Collection，语义去重 |
 | 情绪分析 | 市场多空情绪打分，博主横向对比 |
 | 热点提取 | 关键词 / 主题 / 热门标的 / 重要事件 |
@@ -62,8 +76,6 @@ make install
 
 会：占位复制 `backend/.env`、`frontend/.env.local`（若不存在）、创建 `data/`、克隆 x-tweet-fetcher、`uv sync`、前端 `npm install`。
 
-无 uv 时需自行在 `backend` 下用 `pip install -r requirements.txt`（该文件可由 `uv export` 生成）。
-
 ### 4. 启动开发服务
 
 需**两个终端**：
@@ -73,8 +85,7 @@ make dev-backend    # 终端 1：http://127.0.0.1:8000/docs
 make dev-frontend   # 终端 2：http://localhost:3000
 ```
 
-**更新后端依赖时**：在 `backend/pyproject.toml` 中改版本后执行  
-`cd backend && uv lock && uv export --no-dev --no-hashes -o requirements.txt`（Docker 构建仍用 `requirements.txt`）。
+**更新后端依赖时**：在 `backend/pyproject.toml` 中改版本后执行 `cd backend && uv lock`（Docker 构建与本地均用 `uv.lock`）。
 
 ---
 
@@ -100,6 +111,46 @@ make down
 - 前端：http://localhost:3000
 - 后端 API：http://localhost:8000
 - API 文档：http://localhost:8000/docs
+
+---
+
+## 部署后端到 Render
+
+仓库根目录已提供 [`render.yaml`](render.yaml)（Docker 蓝图）。要点：
+
+1. **在 Render**：New → **Blueprint**，连接本仓库并按提示创建 Web Service（或导入 `render.yaml`）。
+2. **构建上下文**：镜像使用 `backend/Dockerfile`，`dockerContext` 为 **`backend`**，与现有 Docker 构建一致。
+3. **端口**：平台会注入 **`PORT`**；镜像默认 `CMD` 使用 `${PORT:-8000}`；蓝图中 **`dockerCommand`** 在启动前执行 **`alembic upgrade head`** 再拉起 `uvicorn`。
+4. **环境变量（在 Dashboard 里填密钥类）**
+
+   | 变量 | 说明 |
+   |------|------|
+   | `DATABASE_URL` | 推荐整串 Postgres URL（如 Supabase）；需含 `sslmode=require` |
+   | `OPENAI_API_KEY` | LLM + 向量（方舟下 `EMBEDDING_PROVIDER=ark`）；也可单独设 `ARK_API_KEY` |
+   | `CORS_ORIGINS` | 前端生产地址，逗号分隔，例如 `https://你的域名` |
+   | `EMBEDDING_PROVIDER` | 云上默认 **`ark`**（豆包多模态 embedding：`volcenginesdkarkruntime`）；本机 **`local`**=BGE；**`openai`**=兼容 `/embeddings` |
+   | `OPENAI_BASE_URL` | 方舟 **对话** LangChain/OpenAI 的根 URL；向量在 `ark` 模式下由 **Ark SDK 默认网关** 请求（一般不必再配置 Embedding URL，除非用 `ARK_API_BASE_URL` 覆盖）。 |
+
+   其余见 `backend/.env.example`（定时任务、`LLM_MODEL`、通知等按需配置）。
+
+5. **健康检查**：路径 **`/api/health`**。
+6. **区域与档位**：按需编辑 `render.yaml` 里的 `region`、`plan`（如改为 `singapore`、`free` 等）。
+
+前端若部署在 **Vercel / 别处**，把该平台上的 `NEXT_PUBLIC_API_URL` 指到 Render 给出的 `https://<service>.onrender.com`。
+
+### 模式二：流水线打镜像 → GHCR → Render 拉取（与 Blueprint 二选一）
+
+与「Blueprint 直接在 Render 从你仓库里的 Dockerfile 构建」不同，另一种是 **先在 GitHub Actions 构建并推到 GHCR**，Render 只做 **运行时拉镜像**。
+
+1. **确保 `main` 推送能跑绿** [`.github/workflows/docker-build-deploy.yml`](.github/workflows/docker-build-deploy.yml)：未配置 `NEXT_PUBLIC_API_URL` 时只会构建并推送 **`backend`** 镜像（`ghcr.io/<小写仓库名>/backend:latest` 与 `:sha`），不会构建前端镜像。
+2. **把 GHCR 包设为公开**，或在 Render **Environment** 中为 `ghcr.io` 配置有读权限的 **Registry credential**。
+3. **Render**：新建 **Web Service** → **Docker** → **Deploy an existing image**（不要选 Attach Git Repo 当构建源）。
+   - Image URL：`ghcr.io/<你的 GitHub 用户名或组织>/<仓库名小写>/backend:latest`（或直接复制 Actions 日志里推送的 `:sha` 标签）。
+   - **Start Command**（镜像已带默认 CMD，一般用下面覆盖以实现迁移）：`sh -lc "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port \"$PORT\" --workers 1"`
+   - Health check path：`/api/health`，环境变量同上一节表格。
+4. **每次 CI 打完新镜像**：在 Render Dashboard 对该服务 **Manual Deploy**，或在 GitHub 配置 **Deploy Hook**：仓库变量 `ENABLE_RENDER_DEPLOY_HOOK=true`，密钥 `RENDER_DEPLOY_HOOK_URL` = Render → Service → Manage → **Deploy Hook** 里的 URL。
+
+> 若不使用 Deploy Hook，`latest` 标签被覆盖后需在 Render **主动再部署**，平台才会重新拉镜像。
 
 ---
 
@@ -166,17 +217,18 @@ fomo/
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `OPENAI_API_KEY` | 对话 ✅ | 火山方舟 / OpenAI Key；`EMBEDDING_PROVIDER=openai` 时向量也用它 |
-| `OPENAI_BASE_URL` | ❌ | 默认 `https://ark.cn-beijing.volces.com/api/v3`，可按厂商修改 |
-| `LLM_MODEL` | ❌ | 默认 `doubao-seed-2-0-mini-260428`；方舟亦可填接入点 ID |
-| `EMBEDDING_PROVIDER` | ❌ | 默认 **`local`**（本机 BGE）；`openai` 为云端兼容 embedding |
-| `EMBEDDING_DEVICE` | ❌ | 仅 **`local`**：`auto`（默认）/ `cpu` / `mps` / `cuda` |
-| `TELEGRAM_BOT_TOKEN` | ❌ | Telegram 推送（留空不推送） |
-| `WECOM_WEBHOOK_URL` | ❌ | 企业微信推送（留空不推送） |
+| `DATABASE_URL` / `DB_*` | 数据库 ✅ | 见 `backend/.env.example`。 |
+| `OPENAI_API_KEY` | ✅ | 网关 Key；向量可与 **`ARK_API_KEY`** 分拆。|
+| **`LLM_CHAT_BASE_URL`** | ❌ | 对话根 URL；不配则用 **`OPENAI_BASE_URL`** → 方舟默认域名。|
+| **`LLM_CHAT_MODEL`** | ❌ | 对话模型；不配则用 **`LLM_MODEL`**。|
+| **`LLM_EMBED_BASE_URL`** | ❌ | 仅 **`EMBEDDING_PROVIDER=openai`** 等时用；**`ark`** 走 Ark SDK（默认 `…/api/v3`）。 |
+| **`LLM_EMBED_MODEL`** | ❌ | ark/openai 时的 embedding 模型；不配用内置默认，亦兼容 **`ARK_EMBEDDING_MODEL`**。|
+| **`ARK_API_BASE_URL`** | ❌ | 可选：传给 `Ark(base_url=…)` 的网关根路径（通常为 `…/api/v3`）；不配则用 SDK 自带北京域名。|
+| **`LLM_LITE_BASE_URL`** / **`LLM_LITE_MODEL`** | ❌ | 轻量推理（情绪 / 热点）；不配则等同于对话。| 
+| `EMBEDDING_PROVIDER` | ❌ | `local` / `openai` / `ark`。 |
+| `ARK_EMBEDDING_DIMENSIONS`、`ARK_EMBEDDINGS_URL` … | ❌ | 维数默认与 pgvector **`1024`**；**`ARK_EMBEDDINGS_URL`** 兼容旧整条 multimodal URL，会自动归一为网关根。 |
 
-**豆包对话**：`OPENAI_*` + `LLM_MODEL`。**云端向量**：`EMBEDDING_PROVIDER=openai`（embedding 模型名写在 `backend/config.py` 常量 `_OPENAI_COMPAT_EMBEDDING_MODEL`）。**本机 BGE**：`EMBEDDING_PROVIDER=local`（权重名写在同文件 `_LOCAL_EMBEDDING_MODEL`）。`OPENAI_BASE_URL` 仅影响对话，不影响本机向量。
-
-切换 `EMBEDDING_PROVIDER` 或修改 `config.py` 里向量模型常量后，向量维度可能变化，需**清空或重建** `CHROMA_PERSIST_DIR`。
+**习惯写法**：对话仍可「Base + 模型」；向量在 **`EMBEDDING_PROVIDER=ark`** 时对齐官方示例：配置 **`ARK_API_KEY`（或与 LLM 共用 `OPENAI_API_KEY`）+ `LLM_EMBED_MODEL`** 即可。**本机向量**：`EMBEDDING_PROVIDER=local`。换向量维度/模型后请勿与旧 `article_chunks` 混用。
 
 ---
 

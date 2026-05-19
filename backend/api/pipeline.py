@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import hmac
 import threading
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.database import get_db
 from db.models import PipelineRun, SourceCrawlLog
 from scheduler.tasks import get_scheduler_status
+from config import get_settings
 
 router = APIRouter()
 
@@ -71,6 +73,12 @@ def _retry_async(source_id: str, job_id: str):
     crawl_single_source(source_id=source_id, job_id=job_id)
 
 
+def _reembed_research_async(job_id: str):
+    from pipeline.daily_pipeline import run_research_reembed_job
+
+    run_research_reembed_job(job_id)
+
+
 @router.post("/sources/{source_id}/crawl", response_model=TriggerResponse)
 def crawl_source(source_id: str, db: Session = Depends(get_db)):
     """立即爬取单个数据源。"""
@@ -104,6 +112,46 @@ def trigger_pipeline(body: TriggerRequest, db: Session = Depends(get_db)):
     thread.start()
 
     return TriggerResponse(job_id=job_id, message="流水线已启动，请通过 job_id 轮询状态")
+
+
+@router.post("/research/reembed-vectors", response_model=TriggerResponse)
+def reembed_research_vectors(
+    x_reembed_secret: str | None = Header(None, alias="X-Reembed-Secret"),
+    db: Session = Depends(get_db),
+):
+    """
+    Temporary maintenance: drop all pgvector rows for research sources, then
+    re-chunk and re-embed every stored article. Requires RESEARCH_REEMBED_SECRET
+    and matching X-Reembed-Secret header (constant-time compare).
+    Poll GET /api/pipeline/jobs/{job_id} until status is success or failed.
+    """
+    settings = get_settings()
+    expected = settings.research_reembed_secret
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="RESEARCH_REEMBED_SECRET is not set; endpoint disabled",
+        )
+    got = (x_reembed_secret or "").strip()
+    if not got or not hmac.compare_digest(got, expected):
+        raise HTTPException(status_code=403, detail="Invalid or missing X-Reembed-Secret")
+
+    job_id = str(uuid.uuid4())
+    run = PipelineRun(job_id=job_id, run_type="reembed", status="queued")
+    db.add(run)
+    db.commit()
+
+    thread = threading.Thread(
+        target=_reembed_research_async,
+        args=(job_id,),
+        daemon=True,
+    )
+    thread.start()
+
+    return TriggerResponse(
+        job_id=job_id,
+        message="Research re-embed started; poll GET /api/pipeline/jobs/{job_id}",
+    )
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatusOut)
@@ -226,3 +274,5 @@ def get_job_tasks(job_id: str, db: Session = Depends(get_db)):
 @router.get("/scheduler", response_model=List[dict])
 def scheduler_status():
     return get_scheduler_status()
+
+

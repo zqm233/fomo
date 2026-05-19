@@ -47,7 +47,7 @@ def run_hotspot_agent(
 
     user_message = f"日期：{date}\n\n以下是今日简讯内容：\n\n{daily_block}{naming_hint}"
 
-    llm = get_llm(temperature=0.2)
+    llm = get_llm(temperature=0.2, use_lite=True)
     response = llm.invoke(
         [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
     )

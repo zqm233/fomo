@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from config import get_settings
@@ -12,18 +12,8 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
-engine = create_engine(
-    settings.sqlite_url,
-    connect_args={"check_same_thread": False},
-    echo=False,
-)
 
-
-@event.listens_for(engine, "connect")
-def _set_wal_mode(dbapi_conn, _):
-    dbapi_conn.execute("PRAGMA journal_mode=WAL")
-    dbapi_conn.execute("PRAGMA foreign_keys=ON")
-
+engine = create_engine(settings.database_url, echo=False)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -35,18 +25,9 @@ class Base(DeclarativeBase):
 def init_db() -> None:
     import db.models  # noqa: F401 – registers all ORM models with Base.metadata
 
-    # Run any pending Alembic migrations (safe on both fresh and existing DBs)
-    from alembic.config import Config
-    from alembic import command as alembic_command
-    from pathlib import Path
-
-    alembic_cfg = Config(str(Path(__file__).parent.parent / "alembic.ini"))
-    alembic_cfg.set_main_option("sqlalchemy.url", settings.sqlite_url)
-    alembic_command.upgrade(alembic_cfg, "head")
-
     _cleanup_stale_runs()
     _seed_default_prompts()
-    logger.info("Database initialised at %s", settings.sqlite_path)
+    logger.info("Database initialised (connected)")
 
 
 def _cleanup_stale_runs() -> None:

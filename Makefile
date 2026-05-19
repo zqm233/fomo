@@ -11,7 +11,7 @@ dev: ## 提示：本地需同时跑后端 + 前端（两个终端）
 	@echo "  2) make dev-frontend  → http://localhost:3000"
 
 .PHONY: help install dev dev-backend dev-frontend up down \
-        db-migrate db-upgrade db-downgrade db-history db-current \
+        db-migrate db-upgrade db-rollback db-history db-current \
         akshare-smoke
 
 help: ## 列出命令
@@ -43,16 +43,16 @@ up: ## Docker 前台启动全栈
 down: ## Docker 停止容器
 	docker compose down
 
-# ── DB 迁移（改完 models.py 后的标准流程：make db-migrate m="描述" && make db-upgrade）──
+# ── DB 迁移 ────────────────────────────────────────────────────────────────────
 
-db-migrate: ## 根据 models.py 变更自动生成迁移文件  用法: make db-migrate m="add_xxx_column"
+db-migrate: ## 生成迁移文件并立即应用  用法: make db-migrate m="add_xxx_column"
 	@test -n "$(m)" || { echo "用法: make db-migrate m=\"描述\""; exit 1; }
-	cd $(BACKEND_DIR) && uv run alembic revision --autogenerate -m "$(m)"
+	cd $(BACKEND_DIR) && uv run alembic revision --autogenerate -m "$(m)" && uv run alembic upgrade head
 
-db-upgrade: ## 应用所有待执行的迁移到最新版本
+db-upgrade: ## 仅应用已有迁移（不生成新文件）
 	cd $(BACKEND_DIR) && uv run alembic upgrade head
 
-db-downgrade: ## 回滚最近一次迁移  用法: make db-downgrade（默认 -1）
+db-rollback: ## 回滚最近一次迁移  用法: make db-rollback（默认 -1）
 	cd $(BACKEND_DIR) && uv run alembic downgrade ${step:--1}
 
 db-history: ## 查看迁移历史

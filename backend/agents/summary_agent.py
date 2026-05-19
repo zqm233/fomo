@@ -46,7 +46,7 @@ def run_summary_agent(
     Generate a structured pre/post market report in Markdown.
 
     Uses only: emotion/hotspot/stock snapshot passed in + daily digest excerpts
-    (`daily_by_source`). Does not call RAG / Chroma — research vectors are for
+    (`daily_by_source`). Does not call RAG — research vectors are for
     chat Q&A only (`chat_agent`).
     """
     system_prompt = get_active_prompt("summary_agent") or ""

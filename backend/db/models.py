@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     DateTime,
@@ -15,6 +16,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+
+EMBEDDING_DIM = 1024  # bge-m3 / Ark doubao 多模态默认 dimensions=1024 须与向量列一致
 
 
 def _now() -> datetime:
@@ -101,7 +104,7 @@ class PipelineRun(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     job_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False, default=_uuid)
-    run_type: Mapped[str] = mapped_column(String(20), nullable=False)  # pre|post|manual|single_sync
+    run_type: Mapped[str] = mapped_column(String(20), nullable=False)  # pre|post|manual|single_sync|reembed
     status: Mapped[str] = mapped_column(String(20), default="queued")      # "queued"|"running"|"success"|"failed"
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -141,6 +144,28 @@ class TickerMention(Base):
     source_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     source_name: Mapped[str] = mapped_column(String(100), default="")
     mention_date: Mapped[str] = mapped_column(String(10), nullable=False, index=True)  # "2026-05-16"
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ArticleChunk(Base):
+    """pgvector 向量块：research 类型文章的分块嵌入，替代原有 ChromaDB 存储"""
+
+    __tablename__ = "article_chunks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    chunk_id: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    article_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("raw_articles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, default=0)
+    chunk_total: Mapped[int] = mapped_column(Integer, default=1)
+    author: Mapped[str] = mapped_column(String(100), default="")
+    url: Mapped[str] = mapped_column(String(500), default="")
+    published_date: Mapped[str] = mapped_column(String(10), default="", index=True)
+    article_type: Mapped[str] = mapped_column(String(20), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

@@ -1,2 +1,7 @@
 # Local x-tweet-fetcher clone (image builds with `git clone` in Dockerfile instead)
 third_party/
+
+# Avoid overwriting the Linux `.venv` created by `uv sync` in the image with a host OS venv
+.venv/
+__pycache__/
+*.py[cod]

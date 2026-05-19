@@ -65,7 +65,7 @@ def run_sentiment_agent(
 
     user_message = f"日期：{date}\n\n以下是今日简讯内容：\n\n{daily_block}{naming_hint}"
 
-    llm = get_llm(temperature=0.1)
+    llm = get_llm(temperature=0.1, use_lite=True)
     response = llm.invoke(
         [
             SystemMessage(content=(system_prompt or "") + _SOURCE_SENTIMENT_FILTER),

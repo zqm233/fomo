@@ -13,8 +13,9 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def get_llm(temperature: float = 0.3) -> ChatOpenAI:
-    return ChatOpenAI(temperature=temperature, **settings.llm_kwargs)
+def get_llm(temperature: float = 0.3, *, use_lite: bool = False) -> ChatOpenAI:
+    kwargs = settings.lite_llm_kwargs if use_lite else settings.llm_kwargs
+    return ChatOpenAI(temperature=temperature, **kwargs)
 
 
 def get_active_prompt(agent_name: str) -> Optional[str]:

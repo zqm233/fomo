@@ -1,0 +1,39 @@
+# 生产 / CI：仅 backend + frontend；PostgreSQL 在宿主机或其它栈自行维护。
+#
+#   BACKEND_IMAGE   例如 ghcr.io/owner/fomo/backend:commit-sha
+#   FRONTEND_IMAGE  同上
+#
+# 服务器上 backend/.env 的 DB_HOST（或 DATABASE_URL）必须指向可访问的 Postgres（Docker 内置主机名多用 host.docker.internal / 局域网 IP）。
+# 库内需：CREATE EXTENSION IF NOT EXISTS vector;
+#
+# NEXT_PUBLIC_API_URL 在镜像构建时写入前端；deploy 时可再在 .env 里给 Next runtime（按需）。
+
+services:
+  backend:
+    image: ${BACKEND_IMAGE}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/.env:/app/.env:ro
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/api/health\")"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    image: ${FRONTEND_IMAGE}
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+    depends_on:
+      - backend
+    restart: unless-stopped

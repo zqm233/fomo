@@ -1,6 +1,6 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 
 from alembic import context
 
@@ -14,8 +14,9 @@ settings = get_settings()
 # Alembic Config object (gives access to alembic.ini values)
 config = context.config
 
-# Override sqlalchemy.url from our app settings (reads .env)
-config.set_main_option("sqlalchemy.url", settings.sqlite_url)
+# Do not pass database_url through config.set_main_option(...): Postgres URLs commonly
+# use %-encoding (e.g. in passwords), which triggers ConfigParser "invalid interpolation".
+# Offline/online migrations read settings.database_url directly.
 
 # Set up Python logging from alembic.ini
 if config.config_file_name is not None:
@@ -27,31 +28,33 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode (no DB connection, emits SQL to stdout)."""
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=settings.database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        render_as_batch=True,  # required for SQLite ALTER TABLE support
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode (live DB connection)."""
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    """Run migrations in 'online' mode (live DB connection).
+
+    When called from init_db(), a connection is pre-injected via
+    config.attributes["connection"] to avoid creating a second engine
+    (which can deadlock on startup due to connection-pool contention).
+    """
+    pre_existing = config.attributes.get("connection", None)
+    if pre_existing is not None:
+        context.configure(connection=pre_existing, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
+    connectable = create_engine(settings.database_url, poolclass=pool.NullPool)
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            render_as_batch=True,  # required for SQLite ALTER TABLE support
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
 

@@ -45,6 +45,10 @@ export interface Article {
   vectorized: boolean;
 }
 
+export interface ClientMeta {
+  rsshub_twitter_base: string;
+}
+
 export interface Source {
   id: string;
   name: string;
@@ -174,15 +178,33 @@ export interface ChatMessage {
   content: string;
 }
 
+// ── Public meta (SPA hints, no secrets) ───────────────────────────────────
+
+export const metaApi = {
+  clientConfig: () => request<ClientMeta>("/api/meta/client-config"),
+};
+
 // ── Sources API ────────────────────────────────────────────────────────────
 
 export const sourcesApi = {
   list: () => request<Source[]>("/api/sources"),
   get: (id: string) => request<Source>(`/api/sources/${id}`),
-  create: (data: { name: string; source_type: string; handle: string; description?: string; content_type?: string }) =>
-    request<Source>("/api/sources", { method: "POST", body: JSON.stringify(data) }),
-  update: (id: string, data: Partial<Source>) =>
-    request<Source>(`/api/sources/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  create: (data: {
+    name: string;
+    source_type: string;
+    feed_kind?: "custom" | "rsshub_twitter";
+    handle?: string;
+    twitter_username?: string;
+    description?: string;
+    content_type?: string;
+  }) => request<Source>("/api/sources", { method: "POST", body: JSON.stringify(data) }),
+  update: (
+    id: string,
+    data: Partial<Source> & {
+      feed_kind?: "custom" | "rsshub_twitter";
+      twitter_username?: string;
+    }
+  ) => request<Source>(`/api/sources/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   delete: (id: string) =>
     fetch(`${API_BASE}/api/sources/${id}`, { method: "DELETE" }),
 };

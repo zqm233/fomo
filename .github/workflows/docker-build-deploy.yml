@@ -1,0 +1,143 @@
+# 推送 main（或手动运行）时在 GHCR 构建 backend / frontend 镜像；可选 SSH 登录 VPS 更新容器。
+#
+# 使用前请在 GitHub 仓库配置：
+#
+# ── Packages（推送镜像必需） ─────────────────────────────────────────────────
+# Workflow 默认有 packages: write，无需额外 Token。
+#
+# ── 仅后端上 Render / GHCR 时 ───────────────────────────────────────────────
+#   不配 NEXT_PUBLIC_API_URL 也可以：本会跳过前端镜像构建，只 push backend。
+#   Render 中选「Existing image」：`ghcr.io/<owner>/<repo>/backend:latest`（或小写仓库名）。
+#   镜像更新后需在 Render Dashboard 点 Deploy，或配置下方 Deploy Hook。
+#
+# ── 可选：流水线结束后触发 Render 重新拉镜像 ─────────────────────────────────
+#   Repository variable: ENABLE_RENDER_DEPLOY_HOOK = true
+#   Repository secret:   RENDER_DEPLOY_HOOK_URL   （Render Service → Manage → Deploy Hook）
+#
+# ── Repository variables（要构建 frontend 镜像时必需） ─────────────────────
+#   NEXT_PUBLIC_API_URL  浏览器能访问的后端 API 根地址（须含协议），例如：
+#
+# ── 可选：自动部署到 VPS ──────────────────────────────────────────────────────
+#   Repository variable: DEPLOY_TO_VPS = true
+#   Repository secrets:
+#     VPS_HOST        服务器域名或 IP
+#     VPS_USER        SSH 登录用户
+#     VPS_SSH_KEY     SSH 私钥全文（pem）
+#     VPS_APP_PATH    项目在服务器上的路径，含 docker-compose.deploy.yml（如 /home/ubuntu/fomo）
+#     VPS_GHCR_USER   与 PAT 对应的 GitHub 用户名（例如你的 login），仅私有包拉取需要
+#     VPS_GHCR_PULL   读取 GHCR 的 PAT：classic 勾选 read:packages；公有包可留空并跳过 login
+#
+# 服务器预先准备：
+#   - 安装 Docker Compose v2；PostgreSQL/pgvector 在宿主机或其它方式自行安装（多项目可共用）
+#   - VPS_APP_PATH 下保留 docker-compose.deploy.yml；backend/.env 中数据库分项（或 DATABASE_URL）、CORS_ORIGINS 指向实际库与前端域名
+#
+
+name: Docker build / push / deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      backend_tag: ${{ steps.tags.outputs.backend_tag }}
+      frontend_tag: ${{ steps.tags.outputs.frontend_tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Registry namespace (GHCR requires lowercase path)
+        id: ns
+        run: echo "repository_lower=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Image tags for this revision
+        id: tags
+        run: |
+          R="${{ steps.ns.outputs.repository_lower }}"
+          echo "backend_tag=${{ env.REGISTRY }}/${R}/backend:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "frontend_tag=${{ env.REGISTRY }}/${R}/frontend:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.backend_tag }}
+            ${{ env.REGISTRY }}/${{ steps.ns.outputs.repository_lower }}/backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend
+        if: ${{ vars.NEXT_PUBLIC_API_URL != '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.frontend_tag }}
+            ${{ env.REGISTRY }}/${{ steps.ns.outputs.repository_lower }}/frontend:latest
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Skip frontend image (NEXT_PUBLIC_API_URL not set)
+        if: ${{ vars.NEXT_PUBLIC_API_URL == '' }}
+        run: echo "Skipping frontend Docker build — set NEXT_PUBLIC_API_URL Actions variable to enable."
+
+      - name: Trigger Render deploy hook (optional)
+        if: ${{ vars.ENABLE_RENDER_DEPLOY_HOOK == 'true' }}
+        env:
+          HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          set -e
+          if [ -z "${HOOK_URL:-}" ]; then
+            echo "::error::ENABLE_RENDER_DEPLOY_HOOK is true but RENDER_DEPLOY_HOOK_URL secret is empty."
+            exit 1
+          fi
+          curl --fail-with-body -sS -X POST "${HOOK_URL}"
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    # 不配变量则仅构建镜像，不落服务器。VPS 全栈部署需要同时存在 frontend 镜像（见 workflow 首部说明）。
+    if: ${{ vars.DEPLOY_TO_VPS == 'true' && vars.NEXT_PUBLIC_API_URL != '' }}
+
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+            if [ -n "${{ secrets.VPS_GHCR_PULL }}" ]; then
+              echo "${{ secrets.VPS_GHCR_PULL }}" | docker login ghcr.io -u "${{ secrets.VPS_GHCR_USER }}" --password-stdin
+            fi
+            cd "${{ secrets.VPS_APP_PATH }}"
+            export BACKEND_IMAGE="${{ needs.build-and-push.outputs.backend_tag }}"
+            export FRONTEND_IMAGE="${{ needs.build-and-push.outputs.frontend_tag }}"
+            docker compose --env-file .env -f docker-compose.deploy.yml pull
+            docker compose --env-file .env -f docker-compose.deploy.yml up -d

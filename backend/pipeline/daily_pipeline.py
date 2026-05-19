@@ -14,8 +14,8 @@ _STEP_PARSE     = ("parse",    "解析去重")
 _STEP_VECTORIZE = ("vectorize","向量化")
 
 from db.database import SessionLocal
-from db.models import PipelineRun, RawArticle, Source, SourceCrawlLog
-from vector_store.chroma_store import add_documents
+from db.models import ArticleChunk, PipelineRun, RawArticle, Source, SourceCrawlLog
+from vector_store.pg_store import add_documents
 from crawlers.rss_crawler import crawl_rss
 from agents.sentiment_agent import run_sentiment_agent
 from agents.hotspot_agent import run_hotspot_agent
@@ -100,7 +100,7 @@ def _fetch_daily_articles_window(db, hours: int) -> list[dict]:
     """
     Fetch daily-source article contents published within the last `hours` hours.
     Returns list of {source_name, content} dicts.
-    These go directly to agents (not in ChromaDB).
+    These go directly to agents (not vectorized).
     """
     from datetime import timedelta
     cutoff = _now() - timedelta(hours=hours)
@@ -576,3 +576,95 @@ def run_pipeline(
         db.close()
 
     return job_id
+
+
+def run_research_reembed_job(job_id: str) -> None:
+    """
+    For all sources with content_type=research: wipe article_chunks, then re-chunk
+    and embed every RawArticle using the current embedding configuration.
+    """
+    from sqlalchemy import delete as sa_delete
+
+    db = SessionLocal()
+    try:
+        run = _create_run(db, job_id, run_type="reembed")
+        research_sources = db.query(Source).filter(Source.content_type == "research").all()
+        if not research_sources:
+            run.error_msg = "no research sources"
+            db.commit()
+            _finish_run(db, run, success=True)
+            return
+
+        source_ids = [s.id for s in research_sources]
+        by_id = {s.id: s for s in research_sources}
+
+        db.execute(sa_delete(ArticleChunk).where(ArticleChunk.source_id.in_(source_ids)))
+        db.commit()
+        logger.info(
+            "Research re-embed job_id=%s: cleared vectors for %d research source(s)",
+            job_id,
+            len(source_ids),
+        )
+
+        total_articles = 0
+        for sid in source_ids:
+            source = by_id[sid]
+            articles = (
+                db.query(RawArticle)
+                .filter(RawArticle.source_id == sid)
+                .order_by(RawArticle.created_at)
+                .all()
+            )
+            if not articles:
+                continue
+
+            doc_ids = [a.id for a in articles]
+            texts = [a.content or "" for a in articles]
+            metadatas = []
+            for a in articles:
+                if a.published_at:
+                    pub_date = a.published_at.strftime("%Y-%m-%d")
+                else:
+                    pub_date = a.created_at.strftime("%Y-%m-%d")
+                metadatas.append({
+                    "source_id": sid,
+                    "author": a.author or "",
+                    "url": a.url or "",
+                    "published_date": pub_date,
+                    "article_type": source.source_type,
+                })
+
+            added = add_documents(
+                source_id=sid,
+                doc_ids=doc_ids,
+                texts=texts,
+                metadatas=metadatas,
+            )
+            total_articles += added
+            if added:
+                db.query(RawArticle).filter(RawArticle.id.in_(doc_ids)).update(
+                    {"vectorized": True},
+                    synchronize_session=False,
+                )
+            db.commit()
+
+        run.articles_crawled = total_articles
+        run.error_msg = f"re-embedded {total_articles} articles (research)"
+        db.commit()
+        _finish_run(db, run, success=True)
+        logger.info(
+            "Research re-embed job_id=%s finished: %d articles",
+            job_id,
+            total_articles,
+        )
+    except Exception as e:
+        logger.exception("Research re-embed failed job_id=%s: %s", job_id, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        run_err = db.query(PipelineRun).filter(PipelineRun.job_id == job_id).first()
+        if run_err is not None:
+            _finish_run(db, run_err, success=False, error=str(e)[:500])
+    finally:
+        db.close()

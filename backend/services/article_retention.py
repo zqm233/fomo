@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func
+from sqlalchemy import delete, func, select
 
 from config import get_settings
 from db.database import SessionLocal
@@ -24,15 +24,17 @@ def purge_old_daily_articles() -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     db = SessionLocal()
     try:
-        deleted = (
-            db.query(RawArticle)
+        # ORM Query.delete() 不允许在已 join 的 Query 上调用；用 Core delete + 子查询
+        id_subq = (
+            select(RawArticle.id)
             .join(Source, Source.id == RawArticle.source_id)
-            .filter(Source.content_type == "daily")
-            .filter(
+            .where(Source.content_type == "daily")
+            .where(
                 func.coalesce(RawArticle.published_at, RawArticle.created_at) < cutoff
             )
-            .delete(synchronize_session=False)
         )
+        result = db.execute(delete(RawArticle).where(RawArticle.id.in_(id_subq)))
+        deleted = result.rowcount or 0
         db.commit()
         if deleted:
             logger.info(

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { sourcesApi, pipelineApi, Source } from "@/lib/api";
+import { sourcesApi, pipelineApi, Source, metaApi, ClientMeta } from "@/lib/api";
 import { useJobPoller } from "@/lib/useJobPoller";
 import { JobStatusBadge } from "@/components/JobStatusBadge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import {
   BookOpen,
   Database,
+  Link2,
   Loader2,
   Pencil,
   Play,
@@ -21,6 +22,7 @@ import {
   Trash2,
   Rss,
   TrendingUp,
+  Bird,
 } from "lucide-react";
 
 const CONTENT_TYPE_CONFIG = {
@@ -28,31 +30,63 @@ const CONTENT_TYPE_CONFIG = {
     label: "日常简讯",
     icon: TrendingUp,
     className: "border-blue-500/40 text-blue-400",
-    description: "短线交易、市场动态 — 直接存库，参与每日报告",
   },
   research: {
     label: "投研知识库",
     icon: BookOpen,
     className: "border-amber-500/40 text-amber-400",
-    description: "行业研究、深度分析 — 进入 RAG 向量知识库",
   },
 } as const;
+
+const RSSHUB_TWITTER_DEFAULT_BASE =
+  "https://rsshub-chromium-bundled-v580.onrender.com/twitter/user";
+
+type FeedKind = "custom" | "rsshub_twitter";
+
+const FEED_KIND_CONFIG: Record<FeedKind, { label: string }> = {
+  custom: { label: "RSS" },
+  rsshub_twitter: { label: "Twitter" },
+};
+
+/** 若为 RSSHub twitter/user/<name> 则拆出用户名 */
+function deriveFormFromStoredHandle(handle: string, twitterBase: string): {
+  feed_kind: FeedKind;
+  twitter_username: string;
+  handle_url: string;
+} {
+  const nb = twitterBase.replace(/\/$/, "").trim();
+  if (handle.startsWith(`${nb}/`)) {
+    return {
+      feed_kind: "rsshub_twitter",
+      twitter_username: handle.slice(nb.length + 1),
+      handle_url: "",
+    };
+  }
+  return { feed_kind: "custom", twitter_username: "", handle_url: handle };
+}
 
 export default function SourcesPage() {
   const [sources, setSources] = useState<Source[]>([]);
   const [loading, setLoading] = useState(true);
+  const [clientMeta, setClientMeta] = useState<ClientMeta | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [editSource, setEditSource] = useState<Source | null>(null);
   const [form, setForm] = useState({
     name: "",
     source_type: "rss",
+    feed_kind: "custom" as FeedKind,
     handle: "",
+    twitter_username: "",
     description: "",
     content_type: "daily" as "daily" | "research",
   });
   const [submitting, setSubmitting] = useState(false);
 
   const { status: jobStatus, isPolling, startPolling } = useJobPoller();
+
+  useEffect(() => {
+    metaApi.clientConfig().then(setClientMeta).catch(() => setClientMeta(null));
+  }, []);
 
   const load = async () => {
     setLoading(true);
@@ -67,17 +101,51 @@ export default function SourcesPage() {
     load();
   }, []);
 
+  const twitterBaseResolved =
+    (clientMeta?.rsshub_twitter_base ?? RSSHUB_TWITTER_DEFAULT_BASE).replace(/\/$/, "");
+
   const resetForm = () =>
-    setForm({ name: "", source_type: "rss", handle: "", description: "", content_type: "daily" });
+    setForm({
+      name: "",
+      source_type: "rss",
+      feed_kind: "custom",
+      handle: "",
+      twitter_username: "",
+      description: "",
+      content_type: "daily",
+    });
 
   const handleAdd = async () => {
-    if (!form.name || !form.handle) {
-      toast.error("名称和 Feed URL 不能为空");
+    const nameTrim = form.name.trim();
+    if (!nameTrim) {
+      toast.error("名称不能为空");
       return;
     }
+    if (form.feed_kind === "custom") {
+      if (!form.handle.trim()) {
+        toast.error("请填写 RSS Feed URL");
+        return;
+      }
+    } else if (!form.twitter_username.trim()) {
+      toast.error("请填写 Twitter 用户名，或粘贴完整 RSSHub URL");
+      return;
+    }
+
+    const payloadCommon = {
+      name: nameTrim,
+      source_type: "rss",
+      feed_kind: form.feed_kind,
+      description: form.description.trim(),
+      content_type: form.content_type,
+    };
+    const payload =
+      form.feed_kind === "custom"
+        ? { ...payloadCommon, handle: form.handle.trim() }
+        : { ...payloadCommon, twitter_username: form.twitter_username.trim() };
+
     setSubmitting(true);
     try {
-      const created = await sourcesApi.create(form);
+      const created = await sourcesApi.create(payload);
       toast.success("数据源已添加，正在首次抓取…");
       setShowAdd(false);
       resetForm();
@@ -93,28 +161,51 @@ export default function SourcesPage() {
 
   const openEdit = (source: Source) => {
     setEditSource(source);
+    const derived = deriveFormFromStoredHandle(
+      source.handle,
+      twitterBaseResolved
+    );
     setForm({
       name: source.name,
       source_type: source.source_type,
-      handle: source.handle,
+      feed_kind: derived.feed_kind,
+      handle: derived.handle_url || source.handle,
+      twitter_username: derived.twitter_username,
       description: source.description,
       content_type: source.content_type,
     });
   };
 
   const handleEdit = async () => {
-    if (!editSource || !form.name || !form.handle) {
-      toast.error("名称和 URL 不能为空");
+    if (!editSource) return;
+    const nameTrim = form.name.trim();
+    if (!nameTrim) {
+      toast.error("名称不能为空");
       return;
     }
+    if (form.feed_kind === "custom") {
+      if (!form.handle.trim()) {
+        toast.error("请填写 RSS URL");
+        return;
+      }
+    } else if (!form.twitter_username.trim()) {
+      toast.error("Twitter 用户名不能为空");
+      return;
+    }
+
     setSubmitting(true);
     try {
-      await sourcesApi.update(editSource.id, {
-        name: form.name,
-        handle: form.handle,
-        description: form.description,
+      const common = {
+        name: nameTrim,
+        description: form.description.trim(),
         content_type: form.content_type,
-      });
+        feed_kind: form.feed_kind,
+      };
+      const updateBody =
+        form.feed_kind === "custom"
+          ? { ...common, handle: form.handle.trim() }
+          : { ...common, twitter_username: form.twitter_username.trim() };
+      await sourcesApi.update(editSource.id, updateBody);
       toast.success("已保存");
       setEditSource(null);
       load();
@@ -296,7 +387,9 @@ export default function SourcesPage() {
 interface FormState {
   name: string;
   source_type: string;
+  feed_kind: FeedKind;
   handle: string;
+  twitter_username: string;
   description: string;
   content_type: "daily" | "research";
 }
@@ -329,22 +422,67 @@ function SourceFormDialog({
             <label className="text-xs text-muted-foreground mb-1 block">显示名称</label>
             <Input
               className="h-8"
-              placeholder="e.g. 华尔街见闻"
+              placeholder="显示名"
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">RSS Feed URL</label>
-            <Input
-              className="h-8 font-mono text-xs"
-              placeholder="https://example.com/feed.xml"
-              value={form.handle}
-              onChange={(e) => setForm((f) => ({ ...f, handle: e.target.value }))}
-            />
+            <label className="text-xs text-muted-foreground mb-1 block">类型</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(["custom", "rsshub_twitter"] as FeedKind[]).map((fk) => {
+                const cfg = FEED_KIND_CONFIG[fk];
+                const selected = form.feed_kind === fk;
+                const Icon = fk === "custom" ? Link2 : Bird;
+                return (
+                  <button
+                    key={fk}
+                    type="button"
+                    onClick={() =>
+                      setForm((f) => ({
+                        ...f,
+                        feed_kind: fk,
+                        ...(fk === "rsshub_twitter" ? { handle: "" } : { twitter_username: "" }),
+                      }))
+                    }
+                    className={`flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium transition-colors ${
+                      selected
+                        ? "border-green-600 bg-green-50 text-green-900"
+                        : "border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    {cfg.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
+          {form.feed_kind === "rsshub_twitter" ? (
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">
+                推特用户 ID；或填完整 RSSHub 链接
+              </label>
+              <Input
+                className="h-8 font-mono text-xs"
+                placeholder="例如 tychozzz"
+                value={form.twitter_username}
+                onChange={(e) => setForm((f) => ({ ...f, twitter_username: e.target.value }))}
+              />
+            </div>
+          ) : (
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">RSS — 完整链接</label>
+              <Input
+                className="h-8 font-mono text-xs"
+                placeholder="https://..."
+                value={form.handle}
+                onChange={(e) => setForm((f) => ({ ...f, handle: e.target.value }))}
+              />
+            </div>
+          )}
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">用途分类</label>
+            <label className="text-xs text-muted-foreground mb-1 block">用途</label>
             <div className="grid grid-cols-2 gap-2">
               {(["daily", "research"] as const).map((ct) => {
                 const cfg = CONTENT_TYPE_CONFIG[ct];
@@ -355,17 +493,14 @@ function SourceFormDialog({
                     key={ct}
                     type="button"
                     onClick={() => setForm((f) => ({ ...f, content_type: ct }))}
-                    className={`flex flex-col gap-1 rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
+                    className={`flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium transition-colors ${
                       selected
                         ? "border-blue-500 bg-blue-50 text-blue-700"
                         : "border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50"
                     }`}
                   >
-                    <div className="flex items-center gap-1.5 font-medium">
-                      <Icon className="h-3.5 w-3.5" />
-                      {cfg.label}
-                    </div>
-                    <span className="text-[11px] leading-tight text-gray-400">{cfg.description}</span>
+                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    {cfg.label}
                   </button>
                 );
               })}
@@ -375,7 +510,7 @@ function SourceFormDialog({
             <label className="text-xs text-muted-foreground mb-1 block">描述（可选）</label>
             <Input
               className="h-8"
-              placeholder="简短描述"
+              placeholder="可选"
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
             />

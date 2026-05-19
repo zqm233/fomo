@@ -146,7 +146,7 @@ make down
 2. **把 GHCR 包设为公开**，或在 Render **Environment** 中为 `ghcr.io` 配置有读权限的 **Registry credential**。
 3. **Render**：新建 **Web Service** → **Docker** → **Deploy an existing image**（不要选 Attach Git Repo 当构建源）。
    - Image URL：`ghcr.io/<你的 GitHub 用户名或组织>/<仓库名小写>/backend:latest`（或直接复制 Actions 日志里推送的 `:sha` 标签）。
-   - **Start Command**（镜像已带默认 CMD，一般用下面覆盖以实现迁移）：`sh -lc "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port \"$PORT\" --workers 1"`
+   - **Start Command**：留空即用镜像默认 **`/app/scripts/docker-entrypoint.sh`**（内含迁移 + uvicorn）。若曾手写 `uvicorn` 且报 not found，请删掉旧命令或改为该路径。
    - Health check path：`/api/health`，环境变量同上一节表格。
 4. **每次 CI 打完新镜像**：在 Render Dashboard 对该服务 **Manual Deploy**，或在 GitHub 配置 **Deploy Hook**：仓库变量 `ENABLE_RENDER_DEPLOY_HOOK=true`，密钥 `RENDER_DEPLOY_HOOK_URL` = Render → Service → Manage → **Deploy Hook** 里的 URL。
 

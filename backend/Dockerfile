@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:$PATH"
 
 # Dependency layer cache
 COPY pyproject.toml uv.lock ./
@@ -18,9 +19,14 @@ RUN uv sync --frozen --no-dev --no-install-project --no-cache
 
 COPY . .
 
-ENV PATH="/app/.venv/bin:$PATH"
+# Re-sync after app sources; verify console scripts exist (avoids Render "uvicorn: not found")
+RUN uv sync --frozen --no-dev --no-cache \
+    && test -x /app/.venv/bin/uvicorn \
+    && test -x /app/.venv/bin/alembic
+
+RUN chmod +x /app/scripts/docker-entrypoint.sh
 
 EXPOSE 8000
 
-# Render (and similar) inject PORT at runtime; local compose keeps default 8000.
-CMD sh -lc 'exec uvicorn main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 1'
+# Use absolute paths — Render custom commands may not inherit venv PATH.
+CMD ["/app/scripts/docker-entrypoint.sh"]

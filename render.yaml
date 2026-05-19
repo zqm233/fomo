@@ -14,7 +14,8 @@ services:
     dockerContext: backend
     healthCheckPath: /api/health
     # Apply DB migrations on each deploy, then start the API (adjust plan/region above as needed).
-    dockerCommand: 'sh -lc "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1"'
+    # Prefer image CMD (/app/scripts/docker-entrypoint.sh). Override only if needed:
+    # dockerCommand: /app/scripts/docker-entrypoint.sh
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
